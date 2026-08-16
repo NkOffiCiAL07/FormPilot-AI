@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { UserProfile, EmploymentEntry, EducationEntry, CustomField, defaultProfile } from "../shared/types";
 import { Plus, Trash2, Save, Download, Upload } from "lucide-react";
 
@@ -151,6 +151,45 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const inputCls = "input-water";
 
+// Lets the user type freely (commas included) and only parses on blur.
+function CommaSeparatedInput({
+  value,
+  onChange,
+  rows = 2,
+  placeholder,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+  rows?: number;
+  placeholder?: string;
+}) {
+  const serialized = value.join(", ");
+  const [text, setText] = useState(serialized);
+
+  // Keep in sync when parent resets (e.g., import profile)
+  useEffect(() => {
+    setText(serialized);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serialized]);
+
+  function commit(raw: string) {
+    const parsed = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    onChange(parsed);
+    setText(parsed.join(", "));
+  }
+
+  return (
+    <textarea
+      className={`${inputCls} resize-none`}
+      rows={rows}
+      placeholder={placeholder}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={(e) => commit(e.target.value)}
+    />
+  );
+}
+
 function PersonalSection({
   data,
   update,
@@ -234,19 +273,17 @@ function ProfessionalSection({
         <input type="url" className={inputCls} value={data.portfolio} onChange={(e) => update("portfolio", e.target.value)} />
       </Field>
       <Field label="Skills (comma-separated)">
-        <textarea
-          className={inputCls}
-          rows={2}
-          value={data.skills.join(", ")}
-          onChange={(e) => update("skills", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))}
+        <CommaSeparatedInput
+          value={data.skills}
+          onChange={(v) => update("skills", v)}
+          placeholder="e.g. React, Node.js, Python"
         />
       </Field>
       <Field label="Technologies (comma-separated)">
-        <textarea
-          className={inputCls}
-          rows={2}
-          value={data.technologies.join(", ")}
-          onChange={(e) => update("technologies", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))}
+        <CommaSeparatedInput
+          value={data.technologies}
+          onChange={(v) => update("technologies", v)}
+          placeholder="e.g. AWS, Docker, PostgreSQL"
         />
       </Field>
       <Field label="Professional Summary">
