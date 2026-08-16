@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from "react";
 import {
   CheckCircle, Sparkles, AlertTriangle, Paperclip,
-  LayoutPanelLeft, ScanSearch, RefreshCw,
+  LayoutPanelLeft, ScanSearch, RefreshCw, Copy, ClipboardCheck,
+  Mail, Phone, User, Linkedin,
 } from "lucide-react";
+import { UserProfile } from "../shared/types";
 
 interface Summary { total: number; auto: number; ai: number; needsInput: number; documents: number; }
-interface DashboardProps { apiOnline: boolean | null; onSetupProfile?: () => void; }
+interface DashboardProps { apiOnline: boolean | null; onSetupProfile?: () => void; profile: UserProfile; }
 
-export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps) {
+export default function Dashboard({ apiOnline, onSetupProfile, profile }: DashboardProps) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [pageTitle, setPageTitle] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -179,6 +181,9 @@ export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps)
             ))}
           </div>
 
+          {/* Quick Copy */}
+          <QuickCopy profile={profile} />
+
           {/* CTA button */}
           <button
             onClick={openSidePanel}
@@ -300,6 +305,51 @@ export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps)
           <code className="font-mono bg-amber-100 px-1 rounded">local-api/</code> for AI answers.
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Quick Copy ───────────────────────────────────────────────────────────────
+
+function QuickCopy({ profile }: { profile: UserProfile }) {
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const chips = [
+    { key: "email",    icon: <Mail size={11} />,     label: "Email",    value: profile.email },
+    { key: "phone",    icon: <Phone size={11} />,    label: "Phone",    value: profile.phone },
+    { key: "name",     icon: <User size={11} />,     label: "Name",     value: [profile.firstName, profile.lastName].filter(Boolean).join(" ") },
+    { key: "linkedin", icon: <Linkedin size={11} />, label: "LinkedIn", value: profile.linkedin },
+  ].filter((c) => c.value);
+
+  if (!chips.length) return null;
+
+  function copy(key: string, value: string) {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(key);
+      setTimeout(() => setCopied(null), 1800);
+    }).catch(() => {});
+  }
+
+  return (
+    <div className="water-card px-3 py-2.5 animate-fade-up" style={{ animationDelay: "75ms" }}>
+      <div className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mb-2">Quick Copy</div>
+      <div className="flex flex-wrap gap-1.5">
+        {chips.map((c) => (
+          <button
+            key={c.key}
+            onClick={() => copy(c.key, c.value)}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-full text-[11px] font-semibold transition-all active:scale-95"
+            style={
+              copied === c.key
+                ? { background: "linear-gradient(135deg,#10b981,#059669)", color: "white", boxShadow: "0 3px 10px rgba(16,185,129,0.35)" }
+                : { background: "rgba(99,102,241,0.07)", color: "#4f46e5", border: "1px solid rgba(99,102,241,0.15)" }
+            }
+          >
+            {copied === c.key ? <ClipboardCheck size={11} /> : c.icon}
+            {copied === c.key ? "Copied!" : c.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

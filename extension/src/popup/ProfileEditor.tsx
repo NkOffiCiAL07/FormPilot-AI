@@ -1,6 +1,6 @@
-import React, { useState } from "react";
-import { UserProfile, EmploymentEntry, EducationEntry, CustomField } from "../shared/types";
-import { Plus, Trash2, Save } from "lucide-react";
+import React, { useRef, useState } from "react";
+import { UserProfile, EmploymentEntry, EducationEntry, CustomField, defaultProfile } from "../shared/types";
+import { Plus, Trash2, Save, Download, Upload } from "lucide-react";
 
 interface Props {
   profile: UserProfile;
@@ -13,6 +13,7 @@ export default function ProfileEditor({ profile, onSave }: Props) {
   const [data, setData] = useState<UserProfile>(profile);
   const [activeSection, setActiveSection] = useState<Section>("personal");
   const [saved, setSaved] = useState(false);
+  const importRef = useRef<HTMLInputElement>(null);
 
   function update<K extends keyof UserProfile>(key: K, value: UserProfile[K]) {
     setData((d) => ({ ...d, [key]: value }));
@@ -26,6 +27,35 @@ export default function ProfileEditor({ profile, onSave }: Props) {
     onSave(data);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  }
+
+  function handleExport() {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `formpilot-profile-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string);
+        const merged: UserProfile = { ...defaultProfile, ...parsed, updatedAt: new Date().toISOString() };
+        setData(merged);
+        onSave(merged);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      } catch { /* ignore */ } finally {
+        if (importRef.current) importRef.current.value = "";
+      }
+    };
+    reader.readAsText(file);
   }
 
   const sections: { id: Section; label: string }[] = [
@@ -74,7 +104,7 @@ export default function ProfileEditor({ profile, onSave }: Props) {
         )}
       </div>
 
-      <div className="shrink-0 px-4 py-3 border-t border-gray-100">
+      <div className="shrink-0 px-4 py-3 border-t border-gray-100 space-y-2">
         <button
           onClick={handleSave}
           className="w-full flex items-center justify-center gap-2 text-white text-[13px] font-bold py-3 rounded-2xl transition-all active:scale-95"
@@ -86,6 +116,23 @@ export default function ProfileEditor({ profile, onSave }: Props) {
           <Save size={15} />
           {saved ? "Profile Saved!" : "Save Profile"}
         </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={handleExport}
+            className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold border transition-all active:scale-95"
+            style={{ borderColor: "rgba(99,102,241,0.25)", color: "#6366f1", background: "rgba(99,102,241,0.06)" }}
+          >
+            <Download size={12} /> Export JSON
+          </button>
+          <button
+            onClick={() => importRef.current?.click()}
+            className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold border transition-all active:scale-95"
+            style={{ borderColor: "rgba(99,102,241,0.25)", color: "#6366f1", background: "rgba(99,102,241,0.06)" }}
+          >
+            <Upload size={12} /> Import JSON
+          </button>
+          <input ref={importRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
+        </div>
       </div>
     </div>
   );

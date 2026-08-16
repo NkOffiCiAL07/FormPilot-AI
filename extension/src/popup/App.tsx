@@ -4,12 +4,13 @@ import ProfileEditor from "./ProfileEditor";
 import Dashboard from "./Dashboard";
 import DocumentsManager from "./DocumentsManager";
 import HistoryPanel from "./HistoryPanel";
+import Settings from "./Settings";
 import {
-  BrainCircuit, LayoutDashboard, User, FileText, Clock,
+  BrainCircuit, LayoutDashboard, User, FileText, Clock, Settings as SettingsIcon,
   Wifi, WifiOff, Loader2,
 } from "lucide-react";
 
-type Tab = "dashboard" | "profile" | "documents" | "history";
+type Tab = "dashboard" | "profile" | "documents" | "history" | "settings";
 
 function profileCompleteness(p: UserProfile): number {
   const coreFields = [
@@ -62,10 +63,11 @@ export default function App() {
   const showProgressBar = profileLoaded && completeness > 0 && completeness < 100 && activeTab === "profile";
 
   const navItems: { id: Tab; icon: React.ReactNode; label: string }[] = [
-    { id: "dashboard", icon: <LayoutDashboard size={18} />, label: "Home"    },
-    { id: "profile",   icon: <User size={18} />,            label: "Profile" },
-    { id: "documents", icon: <FileText size={18} />,        label: "Docs"    },
-    { id: "history",   icon: <Clock size={18} />,           label: "History" },
+    { id: "dashboard", icon: <LayoutDashboard size={16} />, label: "Home"     },
+    { id: "profile",   icon: <User size={16} />,            label: "Profile"  },
+    { id: "documents", icon: <FileText size={16} />,        label: "Docs"     },
+    { id: "history",   icon: <Clock size={16} />,           label: "History"  },
+    { id: "settings",  icon: <SettingsIcon size={16} />,    label: "Settings" },
   ];
 
   return (
@@ -95,6 +97,7 @@ export default function App() {
             {activeTab === "profile"   && "Your saved profile"}
             {activeTab === "documents" && "Uploaded documents"}
             {activeTab === "history"   && "Application history"}
+            {activeTab === "settings"  && "Preferences & backup"}
           </div>
         </div>
 
@@ -171,10 +174,11 @@ export default function App() {
           transition: "opacity 0.11s ease, transform 0.11s ease",
         }}
       >
-        {activeTab === "dashboard" && <Dashboard apiOnline={apiOnline} onSetupProfile={() => switchTab("profile")} />}
+        {activeTab === "dashboard" && <Dashboard apiOnline={apiOnline} profile={profile} onSetupProfile={() => switchTab("profile")} />}
         {activeTab === "profile"   && <ProfileEditor profile={profile} onSave={saveProfile} />}
         {activeTab === "documents" && <DocumentsManager />}
         {activeTab === "history"   && <HistoryPanel />}
+        {activeTab === "settings"  && <Settings profile={profile} onImportProfile={(p) => { saveProfile(p); switchTab("profile"); }} />}
       </div>
 
       {/* ── Floating liquid dock nav ──────────────────────────────── */}
@@ -200,7 +204,6 @@ export default function App() {
             </span>
             <span className="text-[9px] font-bold tracking-wide">{label}</span>
 
-            {/* Profile incomplete dot */}
             {id === "profile" && completeness < 80 && completeness > 0 && (
               <span
                 className="absolute top-0.5 right-1.5 w-2 h-2 rounded-full border-2 border-white/30 animate-badge-pop"

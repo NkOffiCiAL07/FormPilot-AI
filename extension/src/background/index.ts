@@ -272,6 +272,37 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, sender, sendResponse)
         break;
       }
 
+      case "GENERATE_COVER_LETTER": {
+        const payload = message.payload as { profile: unknown; company: string; role: string; jobContext?: string };
+        try {
+          const res = await fetch(`${LOCAL_API_BASE}/api/cover-letter`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(45000),
+          });
+          const data = await res.json();
+          sendResponse(data);
+        } catch (e) {
+          sendResponse({ error: "API unreachable", letter: null });
+        }
+        break;
+      }
+
+      case "CLEAR_AI_MEMORY": {
+        try {
+          const res = await fetch(`${LOCAL_API_BASE}/api/cover-letter/memory`, {
+            method: "DELETE",
+            signal: AbortSignal.timeout(5000),
+          });
+          const data = await res.json();
+          sendResponse(data);
+        } catch {
+          sendResponse({ error: "API unreachable" });
+        }
+        break;
+      }
+
       case "API_STATUS": {
         const online = await checkApiStatus();
         sendResponse({ online });

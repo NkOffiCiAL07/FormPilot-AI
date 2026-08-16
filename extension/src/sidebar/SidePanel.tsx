@@ -2,10 +2,11 @@ import React, { useEffect, useState } from "react";
 import {
   BrainCircuit, CheckCircle, Sparkles, AlertTriangle, Paperclip,
   ChevronDown, ChevronUp, Pencil, Check, Loader2, FolderOpen, LocateFixed,
-  ScanSearch, FileCheck, Copy, ClipboardCheck,
+  ScanSearch, FileCheck, Copy, ClipboardCheck, FileText, WifiOff,
 } from "lucide-react";
-import { FieldResult, FillStatus } from "../shared/types";
-import { StoredDocument, getDocuments, recommendResume, base64ToObjectUrl } from "../shared/storage";
+import { FieldResult, FillStatus, UserProfile, defaultProfile } from "../shared/types";
+import { StoredDocument, getDocuments, recommendResume, base64ToObjectUrl, saveDocument } from "../shared/storage";
+import { LOCAL_API_BASE } from "../shared/constants";
 
 interface TabState {
   results: FieldResult[];
@@ -33,10 +34,13 @@ export default function SidePanel() {
   const [filled, setFilled] = useState(false);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [documents, setDocuments] = useState<StoredDocument[]>([]);
+  const [profile, setProfile] = useState<UserProfile>(defaultProfile);
+  const [showCoverLetter, setShowCoverLetter] = useState(false);
 
   useEffect(() => {
     loadState();
     getDocuments().then(setDocuments);
+    chrome.storage.local.get("profile", (d) => { if (d.profile) setProfile(d.profile); });
 
     const sessionListener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== "session") return;
@@ -228,21 +232,50 @@ export default function SidePanel() {
         )}
       </div>
 
+      {/* ── Cover Letter Generator ────────────────────────────────── */}
+      {showCoverLetter && (
+        <CoverLetterPanel
+          profile={profile}
+          company={state ? extractCompanyFromState(state) : ""}
+          role={state ? extractRoleFromState(state) : ""}
+          onClose={() => setShowCoverLetter(false)}
+          documents={documents}
+        />
+      )}
+
       {/* ── Fill button footer ─────────────────────────────────────── */}
       <div className="shrink-0 px-4 py-3 bg-white border-t border-gray-100">
-        <button
-          onClick={handleFill}
-          disabled={filling}
-          className="fill-btn w-full py-3.5 flex items-center justify-center gap-2"
-        >
-          {filling ? (
-            <><Loader2 size={16} className="animate-spin" /> Filling form…</>
-          ) : filled ? (
-            <><FileCheck size={16} /> All fields filled!</>
-          ) : (
-            <>Fill Form &nbsp;<span className="text-white/70 font-normal text-xs">({results.filter(r => r.status === "auto" || r.status === "ai").length} fields)</span></>
-          )}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleFill}
+            disabled={filling}
+            className="fill-btn flex-1 py-3.5 flex items-center justify-center gap-2"
+          >
+            {filling ? (
+              <><Loader2 size={16} className="animate-spin" /> Filling…</>
+            ) : filled ? (
+              <><FileCheck size={16} /> Done!</>
+            ) : (
+              <>Fill Form <span className="text-white/70 font-normal text-xs">({results.filter(r => r.status === "auto" || r.status === "ai").length})</span></>
+            )}
+          </button>
+          <button
+            onClick={() => setShowCoverLetter((v) => !v)}
+            className="shrink-0 flex items-center justify-center gap-1 px-3 py-2 rounded-[18px] text-[11px] font-bold transition-all active:scale-95"
+            style={{
+              background: showCoverLetter
+                ? "linear-gradient(135deg,#6366f1,#a855f7)"
+                : "rgba(99,102,241,0.08)",
+              color: showCoverLetter ? "white" : "#6366f1",
+              border: "1.5px solid rgba(99,102,241,0.2)",
+              boxShadow: showCoverLetter ? "0 4px 14px rgba(99,102,241,0.35)" : "none",
+            }}
+            title="Generate cover letter with AI"
+          >
+            <Sparkles size={14} />
+            Cover Letter
+          </button>
+        </div>
         <p className="text-center text-[10px] text-gray-400 mt-1.5">
           FormPilot will never auto-submit your form
         </p>
@@ -582,6 +615,213 @@ function DocumentFieldCard({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function extractCompanyFromState(state: { title: string; url: string }): string {
+  try {
+    const hostname = new URL(state.url).hostname.replace(/^www\./, "");
+    let m = state.url.match(/greenhouse\.io\/([^/?#]+)/);
+    if (m) return m[1];
+    m = state.url.match(/lever\.co\/([^/?#]+)/);
+    if (m) return m[1];
+    const atMatch = state.title.match(/\s[Aa][Tt]\s(.+?)(?:\s[-|]|$)/);
+    if (atMatch) return atMatch[1].trim();
+    const pipeMatch = state.title.split(/\s\|\s/);
+    if (pipeMatch.length > 1) return pipeMatch[pipeMatch.length - 1].trim();
+    return hostname.split(".")[0];
+  } catch { return ""; }
+}
+
+function extractRoleFromState(state: { title: string }): string {
+  return state.title
+    .replace(/\s\|\s.*$/, "")
+    .replace(/\s[-–]\s.*$/, "")
+    .replace(/\s[Aa][Tt]\s.*$/, "")
+    .trim() || state.title;
+}
+
+// ─── Cover Letter Panel ───────────────────────────────────────────────────────
+
+function CoverLetterPanel({
+  profile, company, role, onClose, documents,
+}: {
+  profile: UserProfile;
+  company: string;
+  role: string;
+  onClose: () => void;
+  documents: StoredDocument[];
+}) {
+  const [letter, setLetter] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  async function generate() {
+    setGenerating(true);
+    setError("");
+    setLetter("");
+    try {
+      const res = await fetch(`${LOCAL_API_BASE}/api/cover-letter`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile, company, role, jobContext: `${role} at ${company}` }),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!res.ok) throw new Error("API error");
+      const data = await res.json();
+      if (data.error && !data.letter) { setError("AI is offline. Start the local API server to generate cover letters."); return; }
+      setLetter(data.letter || "");
+    } catch (e: unknown) {
+      setError("Could not reach the local AI. Run `npm start` in `local-api/` first.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  function copyLetter() {
+    navigator.clipboard.writeText(letter).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  async function saveToDocs() {
+    const blob = new Blob([letter], { type: "text/plain" });
+    const encoded = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve((reader.result as string).split(",")[1]);
+      reader.readAsDataURL(blob);
+    });
+    await saveDocument({
+      id: crypto.randomUUID(),
+      name: `Cover Letter — ${role || "Role"} at ${company || "Company"}`,
+      category: "cover_letter",
+      filename: `cover-letter-${company}-${new Date().toISOString().slice(0, 10)}.txt`,
+      size: blob.size,
+      mimeType: "text/plain",
+      uploadedAt: new Date().toISOString(),
+      tags: [company, role].filter(Boolean),
+      data: encoded,
+    });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  return (
+    <div className="shrink-0 border-t border-gray-100 bg-white">
+      {/* Panel header */}
+      <div
+        className="flex items-center justify-between px-4 py-2.5"
+        style={{ background: "linear-gradient(135deg,rgba(99,102,241,0.08),rgba(168,85,247,0.05))" }}
+      >
+        <div className="flex items-center gap-2">
+          <div
+            className="w-6 h-6 rounded-lg flex items-center justify-center"
+            style={{ background: "linear-gradient(135deg,#6366f1,#a855f7)" }}
+          >
+            <FileText size={12} className="text-white" />
+          </div>
+          <span className="text-[12px] font-bold text-gray-800">AI Cover Letter</span>
+          {(company || role) && (
+            <span className="text-[10px] text-gray-400 truncate max-w-[100px]">
+              {role && company ? `${role} @ ${company}` : role || company}
+            </span>
+          )}
+        </div>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 text-xs">✕</button>
+      </div>
+
+      <div className="px-4 pb-3 pt-2 space-y-2.5 max-h-72 overflow-y-auto">
+        {!letter && !generating && (
+          <div className="text-center py-2">
+            <p className="text-[11px] text-gray-500 mb-3 leading-relaxed">
+              Generate a tailored cover letter using your profile and this job's context.
+            </p>
+            <button
+              onClick={generate}
+              className="flex items-center justify-center gap-2 w-full py-2.5 rounded-2xl text-[13px] font-bold text-white transition-all active:scale-95"
+              style={{
+                background: "linear-gradient(135deg,#6366f1,#8b5cf6,#a855f7)",
+                boxShadow: "0 6px 20px rgba(99,102,241,0.4)",
+              }}
+            >
+              <Sparkles size={14} /> Generate with AI
+            </button>
+          </div>
+        )}
+
+        {generating && (
+          <div className="flex flex-col items-center gap-2 py-4">
+            <div
+              className="w-10 h-10 flex items-center justify-center"
+              style={{
+                background: "linear-gradient(135deg,rgba(99,102,241,0.15),rgba(168,85,247,0.08))",
+                borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
+                animation: "liquid 3s ease-in-out infinite",
+              }}
+            >
+              <Loader2 size={18} className="text-brand-500 animate-spin" />
+            </div>
+            <p className="text-[11px] text-gray-500">Writing your cover letter…</p>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+            <WifiOff size={13} className="text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-amber-700 leading-relaxed">{error}</p>
+          </div>
+        )}
+
+        {letter && (
+          <>
+            <div
+              className="text-[12px] text-gray-700 bg-gray-50 rounded-xl px-3 py-3 leading-relaxed whitespace-pre-wrap border border-gray-100"
+              style={{ maxHeight: 160, overflowY: "auto" }}
+            >
+              {letter}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={copyLetter}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold text-white transition-all active:scale-95"
+                style={{
+                  background: copied
+                    ? "linear-gradient(135deg,#10b981,#059669)"
+                    : "linear-gradient(135deg,#6366f1,#8b5cf6)",
+                  boxShadow: "0 3px 12px rgba(99,102,241,0.3)",
+                }}
+              >
+                {copied ? <><ClipboardCheck size={12} /> Copied!</> : <><Copy size={12} /> Copy</>}
+              </button>
+              <button
+                onClick={saveToDocs}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold transition-all active:scale-95"
+                style={{
+                  background: saved ? "rgba(16,185,129,0.1)" : "rgba(99,102,241,0.08)",
+                  color: saved ? "#059669" : "#6366f1",
+                  border: `1.5px solid ${saved ? "rgba(16,185,129,0.3)" : "rgba(99,102,241,0.2)"}`,
+                }}
+              >
+                <FileText size={12} />
+                {saved ? "Saved!" : "Save to Docs"}
+              </button>
+              <button
+                onClick={generate}
+                className="px-3 py-2 rounded-xl text-[11px] font-semibold text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors"
+                title="Regenerate"
+              >
+                ↻
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

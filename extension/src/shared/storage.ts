@@ -141,3 +141,32 @@ export async function deleteApplicationRecord(id: string): Promise<void> {
 export async function clearHistory(): Promise<void> {
   return new Promise((resolve) => chrome.storage.local.set({ [HISTORY_KEY]: [] }, resolve));
 }
+
+export async function clearAllData(): Promise<void> {
+  return new Promise((resolve) => chrome.storage.local.clear(resolve));
+}
+
+// ─── App Settings ─────────────────────────────────────────────────────────────
+
+export interface AppSettings {
+  highlightFields: boolean;
+  showConfidence: boolean;
+}
+
+const SETTINGS_KEY = "fp_settings";
+export const DEFAULT_SETTINGS: AppSettings = {
+  highlightFields: true,
+  showConfidence: true,
+};
+
+export async function getSettings(): Promise<AppSettings> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(SETTINGS_KEY, (res) => {
+      resolve({ ...DEFAULT_SETTINGS, ...(res[SETTINGS_KEY] ?? {}) });
+    });
+  });
+}
+
+export async function saveSettings(settings: AppSettings): Promise<void> {
+  return new Promise((resolve) => chrome.storage.local.set({ [SETTINGS_KEY]: settings }, resolve));
+}

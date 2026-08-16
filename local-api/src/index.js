@@ -4,6 +4,7 @@ import analyzeRouter from "./routes/analyze.js";
 import profileRouter from "./routes/profile.js";
 import documentsRouter from "./routes/documents.js";
 import historyRouter from "./routes/history.js";
+import coverLetterRouter from "./routes/coverLetter.js";
 import { getProvider } from "./ai/provider.js";
 
 const app = express();
@@ -27,6 +28,7 @@ app.use("/api/analyze", analyzeRouter);
 app.use("/api/profile", profileRouter);
 app.use("/api/documents", documentsRouter);
 app.use("/api/history", historyRouter);
+app.use("/api/cover-letter", coverLetterRouter);
 
 // Health check
 app.get("/health", async (_req, res) => {

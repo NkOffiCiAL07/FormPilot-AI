@@ -164,6 +164,8 @@ export type MessageType =
   | "CLICK_FILE_INPUT"
   | "SCROLL_TO_FIELD"
   | "SAVE_APPLICATION"
+  | "GENERATE_COVER_LETTER"
+  | "CLEAR_AI_MEMORY"
   | "ERROR";
 
 export interface ExtMessage {

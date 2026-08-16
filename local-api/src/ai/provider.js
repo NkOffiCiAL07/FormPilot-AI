@@ -98,6 +98,32 @@ Write the best answer for this question based on the profile above.`;
     ]);
   }
 
+  async generateCoverLetter({ profile, company, role, jobContext }) {
+    const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ") || "the applicant";
+    const profileSummary = [
+      `Name: ${fullName}`,
+      profile.currentTitle ? `Current role: ${profile.currentTitle} at ${profile.currentCompany}` : "",
+      profile.totalExperience ? `Experience: ${profile.totalExperience}` : "",
+      profile.skills?.length ? `Skills: ${profile.skills.slice(0, 10).join(", ")}` : "",
+      profile.summary ? `About: ${profile.summary.slice(0, 400)}` : "",
+    ].filter(Boolean).join("\n");
+
+    const systemPrompt = `You are an expert career coach. Write professional, compelling cover letters that highlight the candidate's genuine strengths. Never fabricate experience. Write in first person, under 350 words, 3-4 paragraphs.`;
+
+    const userPrompt = `Write a cover letter for ${fullName} applying for the role of ${role || "this position"} at ${company || "this company"}.
+
+Candidate profile:
+${profileSummary}
+${jobContext ? `\nJob context: ${jobContext.slice(0, 500)}` : ""}
+
+Write a complete, ready-to-use cover letter with proper greeting and sign-off.`;
+
+    return await this.chat([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ]);
+  }
+
   async scoreResume(jobDescription, resumes) {
     const scores = [];
     for (const resume of resumes) {
