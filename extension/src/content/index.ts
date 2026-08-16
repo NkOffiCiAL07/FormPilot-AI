@@ -6,19 +6,33 @@ let currentFields: NormalizedField[] = [];
 let currentResults: FieldResult[] = [];
 let observer: MutationObserver | null = null;
 
-// ─── Initial scan ─────────────────────────────────────────────────────────────
+// Skip scanning in tiny/navigation frames to avoid noise
+function shouldSkipFrame(): boolean {
+  if (window.self === window.top) return false; // always scan top frame
+  const w = window.innerWidth || document.documentElement.clientWidth;
+  const h = window.innerHeight || document.documentElement.clientHeight;
+  // Skip if the frame is too small to be a real form container
+  if (w < 100 || h < 100) return true;
+  // Skip known non-form iframes
+  const src = window.location.href;
+  const skipPatterns = ["/tracking", "/analytics", "/ads", "doubleclick", "googlesyndication", "facebook.net/tr"];
+  if (skipPatterns.some((p) => src.includes(p))) return true;
+  return false;
+}
+
+// ─── Scan & notify ────────────────────────────────────────────────────────────
 
 function doScan(): NormalizedField[] {
   currentFields = scanForms();
   return currentFields;
 }
 
-// notify background that we found fields
 function notifyBackground(fields: NormalizedField[]) {
+  if (fields.length === 0) return;
   chrome.runtime.sendMessage<ExtMessage>({
     type: "FORM_SCANNED",
-    payload: { fields, url: location.href, title: document.title },
-  });
+    payload: { fields, url: window.top?.location.href ?? location.href, title: window.top?.document.title ?? document.title },
+  }).catch(() => {/* extension may be reloading */});
 }
 
 // ─── Message handler ──────────────────────────────────────────────────────────
@@ -28,7 +42,7 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, _sender, sendResponse
     case "SCAN_FORM": {
       const fields = doScan();
       sendResponse({ fields });
-      if (fields.length > 0) notifyBackground(fields);
+      notifyBackground(fields);
       break;
     }
 
@@ -51,23 +65,32 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, _sender, sendResponse
       sendResponse({ error: "unknown message type" });
   }
 
-  return true; // keep channel open for async
+  return true;
 });
 
-// ─── Auto-scan on load ────────────────────────────────────────────────────────
+// ─── Init ─────────────────────────────────────────────────────────────────────
 
 (function init() {
-  if (document.readyState === "complete" || document.readyState === "interactive") {
+  if (shouldSkipFrame()) return;
+
+  function runScan() {
     const fields = doScan();
-    if (fields.length > 0) notifyBackground(fields);
+    notifyBackground(fields);
+  }
+
+  if (document.readyState === "complete" || document.readyState === "interactive") {
+    runScan();
+    // Also try after a short delay — some SPAs hydrate late
+    setTimeout(runScan, 1500);
+    setTimeout(runScan, 4000);
   } else {
     document.addEventListener("DOMContentLoaded", () => {
-      const fields = doScan();
-      if (fields.length > 0) notifyBackground(fields);
+      runScan();
+      setTimeout(runScan, 1500);
     });
   }
 
-  // watch for SPA route changes / dynamic form injection
+  // Watch for SPA route changes and dynamically injected forms
   observer = watchForNewFields((newFields) => {
     currentFields = newFields;
     notifyBackground(newFields);

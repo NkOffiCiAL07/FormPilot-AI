@@ -55,11 +55,16 @@ export default function SidePanel() {
   async function handleFill() {
     setFilling(true);
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) return;
-    await chrome.tabs.sendMessage(tab.id, { type: "FILL_FORM", payload: { results } });
-    setFilling(false);
-    setFilled(true);
-    setTimeout(() => setFilled(false), 3000);
+    if (!tab?.id) { setFilling(false); return; }
+    // Route through background so it reaches the correct frame
+    chrome.runtime.sendMessage({
+      type: "FILL_FORM",
+      payload: { results, tabId: tab.id },
+    }, () => {
+      setFilling(false);
+      setFilled(true);
+      setTimeout(() => setFilled(false), 3000);
+    });
   }
 
   const filtered = results.filter((r) => {

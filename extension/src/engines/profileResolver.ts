@@ -216,9 +216,9 @@ export function resolveAllFields(fields: NormalizedField[], profile: UserProfile
   return fields.map((f) => resolveField(f, profile));
 }
 
-export function buildSummary(results: FieldResult[]) {
+export function buildSummary(results: FieldResult[], totalFields?: number) {
   return {
-    total: results.length,
+    total: totalFields ?? results.length,
     auto: results.filter((r) => r.status === "auto").length,
     ai: results.filter((r) => r.status === "ai").length,
     needsInput: results.filter((r) => r.status === "needs_input" || r.status === "sensitive").length,

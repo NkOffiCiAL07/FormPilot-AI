@@ -17,14 +17,33 @@ export default function Dashboard({ apiOnline }: DashboardProps) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [pageTitle, setPageTitle] = useState("");
   const [scanning, setScanning] = useState(false);
+  const [activeTabId, setActiveTabId] = useState<number | null>(null);
 
   useEffect(() => {
     loadTabData();
   }, []);
 
+  // Listen for storage changes so popup updates automatically when scan finishes
+  useEffect(() => {
+    if (activeTabId == null) return;
+    const key = `tab_${activeTabId}`;
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "session" && changes[key]) {
+        const state = changes[key].newValue;
+        if (state) {
+          setSummary(state.summary);
+          setPageTitle(state.title || "");
+        }
+      }
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
+  }, [activeTabId]);
+
   async function loadTabData() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
+    setActiveTabId(tab.id);
 
     chrome.storage.session.get(`tab_${tab.id}`, (data) => {
       const state = data[`tab_${tab.id}`];
@@ -38,23 +57,28 @@ export default function Dashboard({ apiOnline }: DashboardProps) {
   async function handleScan() {
     setScanning(true);
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
-      chrome.tabs.sendMessage(tab.id, { type: "SCAN_FORM" }, () => {
-        setTimeout(() => {
-          loadTabData();
-          setScanning(false);
-        }, 1200);
-      });
-    }
+    if (!tab?.id) { setScanning(false); return; }
+
+    // Tell background to forward scan command to the active tab's content scripts
+    chrome.runtime.sendMessage({ type: "SCAN_FORM", payload: { tabId: tab.id } }, () => {
+      // Storage listener will pick up the result; also poll as fallback
+      setTimeout(() => {
+        loadTabData();
+        setScanning(false);
+      }, 2500);
+    });
   }
 
   async function openSidePanel() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id) {
-      chrome.runtime.sendMessage({ type: "OPEN_SIDEPANEL", payload: { tabId: tab.id } });
+    if (!tab?.id) return;
+    // Pass tabId explicitly — background sender.tab.id is undefined for popup messages
+    chrome.runtime.sendMessage({ type: "OPEN_SIDEPANEL", payload: { tabId: tab.id } }, () => {
       window.close();
-    }
+    });
   }
+
+  const hasFields = summary && summary.total > 0;
 
   return (
     <div className="p-4 space-y-4">
@@ -65,8 +89,7 @@ export default function Dashboard({ apiOnline }: DashboardProps) {
         </div>
       )}
 
-      {/* Summary cards */}
-      {summary ? (
+      {hasFields ? (
         <>
           <div className="text-sm font-semibold text-gray-700">
             {summary.total} fields detected
@@ -103,13 +126,21 @@ export default function Dashboard({ apiOnline }: DashboardProps) {
             className="w-full bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors"
           >
             <LayoutPanelLeft size={16} />
-            Review & Fill Form
+            Review &amp; Fill Form
+          </button>
+
+          <button
+            onClick={handleScan}
+            disabled={scanning}
+            className="w-full text-xs text-gray-500 hover:text-brand-600 disabled:opacity-50 transition-colors py-1"
+          >
+            {scanning ? "Re-scanning…" : "Re-scan page"}
           </button>
         </>
       ) : (
         <div className="flex flex-col items-center gap-3 py-6">
           <p className="text-sm text-gray-500 text-center">
-            No form detected on this page yet.
+            {scanning ? "Scanning for form fields…" : "No form detected on this page yet."}
           </p>
           <button
             onClick={handleScan}
@@ -121,11 +152,18 @@ export default function Dashboard({ apiOnline }: DashboardProps) {
         </div>
       )}
 
+      {/* Profile setup nudge */}
+      {hasFields && summary.auto === 0 && summary.needsInput === summary.total && (
+        <div className="text-xs bg-blue-50 border border-blue-200 text-blue-700 rounded-lg p-2">
+          Set up your <strong>Profile</strong> tab so FormPilot can auto-fill your details.
+        </div>
+      )}
+
       {/* API status notice */}
       {apiOnline === false && (
         <div className="text-xs bg-amber-50 border border-amber-200 text-amber-700 rounded-lg p-2">
-          Local AI server offline. Start it with <code className="font-mono">npm start</code> in the{" "}
-          <code>local-api/</code> folder for AI-generated answers.
+          Local AI server offline. Start it with <code className="font-mono">npm start</code> in{" "}
+          <code>local-api/</code> for AI-generated answers.
         </div>
       )}
     </div>
