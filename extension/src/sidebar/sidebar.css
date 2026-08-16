@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply m-0 p-0 font-sans bg-gray-50 text-gray-900;
+  min-height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}
