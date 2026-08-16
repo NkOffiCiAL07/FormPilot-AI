@@ -109,9 +109,6 @@ export default function HistoryPanel() {
             FormPilot automatically logs here every time you fill and submit a form.
           </div>
         </div>
-        <style>{`
-          @keyframes liquid{0%,100%{border-radius:60% 40% 30% 70%/60% 30% 70% 40%}50%{border-radius:30% 60% 70% 40%/50% 60% 30% 60%}}
-        `}</style>
       </div>
     );
   }
@@ -213,6 +210,7 @@ function ApplicationCard({
   const [showNotes, setShowNotes] = useState(false);
   const [notes, setNotes] = useState(record.notes ?? "");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [faviconFailed, setFaviconFailed] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const meta = STATUS_META[record.status];
 
@@ -231,6 +229,8 @@ function ApplicationCard({
     ? `https://www.google.com/s2/favicons?domain=${record.domain}&sz=32`
     : null;
 
+  const companyInitial = (record.company || "?")[0].toUpperCase();
+
   return (
     <div
       className="bg-white rounded-2xl border border-gray-100 shadow-card overflow-hidden animate-fade-up"
@@ -240,16 +240,21 @@ function ApplicationCard({
         {/* Top row */}
         <div className="flex items-start gap-2.5">
           {/* Favicon */}
-          <div className="shrink-0 w-8 h-8 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center overflow-hidden mt-0.5">
-            {faviconUrl ? (
+          <div className="shrink-0 w-8 h-8 rounded-xl overflow-hidden mt-0.5 flex items-center justify-center">
+            {faviconUrl && !faviconFailed ? (
               <img
                 src={faviconUrl}
                 alt=""
-                className="w-5 h-5 object-contain"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                className="w-8 h-8 object-contain rounded-xl"
+                onError={() => setFaviconFailed(true)}
               />
             ) : (
-              <Clock size={14} className="text-gray-400" />
+              <div
+                className="w-8 h-8 rounded-xl flex items-center justify-center text-white text-[13px] font-black"
+                style={{ background: "linear-gradient(135deg,#6366f1,#a855f7)" }}
+              >
+                {companyInitial}
+              </div>
             )}
           </div>
 

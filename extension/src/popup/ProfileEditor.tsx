@@ -102,7 +102,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2 text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-brand-400/40 focus:border-brand-300 transition-colors";
+const inputCls = "input-water";
 
 function PersonalSection({
   data,
@@ -203,7 +203,7 @@ function ProfessionalSection({
         />
       </Field>
       <Field label="Professional Summary">
-        <textarea className={inputCls} rows={4} value={data.summary} onChange={(e) => update("summary", e.target.value)} />
+        <textarea className={`${inputCls} resize-none`} rows={4} value={data.summary} onChange={(e) => update("summary", e.target.value)} />
       </Field>
     </>
   );
@@ -268,7 +268,7 @@ function EmploymentSection({
             Current position
           </label>
           <Field label="Description">
-            <textarea className={inputCls} rows={2} value={entry.description} onChange={(e) => updateEntry(entry.id, "description", e.target.value)} />
+            <textarea className={`${inputCls} resize-none`} rows={2} value={entry.description} onChange={(e) => updateEntry(entry.id, "description", e.target.value)} />
           </Field>
         </div>
       ))}

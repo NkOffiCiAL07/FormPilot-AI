@@ -4,18 +4,8 @@ import {
   LayoutPanelLeft, ScanSearch, RefreshCw,
 } from "lucide-react";
 
-interface Summary {
-  total: number;
-  auto: number;
-  ai: number;
-  needsInput: number;
-  documents: number;
-}
-
-interface DashboardProps {
-  apiOnline: boolean | null;
-  onSetupProfile?: () => void;
-}
+interface Summary { total: number; auto: number; ai: number; needsInput: number; documents: number; }
+interface DashboardProps { apiOnline: boolean | null; onSetupProfile?: () => void; }
 
 export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps) {
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -23,17 +13,15 @@ export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps)
   const [scanning, setScanning] = useState(false);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
 
-  useEffect(() => {
-    loadTabData();
-  }, []);
+  useEffect(() => { loadTabData(); }, []);
 
   useEffect(() => {
     if (activeTabId == null) return;
     const key = `tab_${activeTabId}`;
     const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area === "session" && changes[key]) {
-        const state = changes[key].newValue;
-        if (state) { setSummary(state.summary); setPageTitle(state.title || ""); }
+        const s = changes[key].newValue;
+        if (s) { setSummary(s.summary); setPageTitle(s.title || ""); }
       }
     };
     chrome.storage.onChanged.addListener(listener);
@@ -45,8 +33,8 @@ export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps)
     if (!tab?.id) return;
     setActiveTabId(tab.id);
     chrome.storage.session.get(`tab_${tab.id}`, (data) => {
-      const state = data[`tab_${tab.id}`];
-      if (state) { setSummary(state.summary); setPageTitle(state.title || tab.title || ""); }
+      const s = data[`tab_${tab.id}`];
+      if (s) { setSummary(s.summary); setPageTitle(s.title || tab.title || ""); }
     });
   }
 
@@ -65,198 +53,248 @@ export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps)
     try {
       await (chrome.sidePanel as any).setOptions({ tabId: tab.id, path: "sidepanel.html", enabled: true });
       await (chrome.sidePanel as any).open({ tabId: tab.id });
-    } catch (e) {
-      console.error("[FormPilot] sidePanel.open error:", e);
-    }
+    } catch (e) { console.error("[FormPilot] sidePanel.open error:", e); }
     window.close();
   }
 
   const hasFields = summary && summary.total > 0;
 
+  /* ── Stat card definitions ─────────────────────────────────────── */
   const metrics = hasFields ? [
     {
-      icon: <CheckCircle size={17} className="text-emerald-500" />,
-      label: "Auto-fill",
-      count: summary.auto,
-      color: "from-emerald-50 to-green-50",
-      border: "border-emerald-100",
-      text: "text-emerald-700",
+      icon: <CheckCircle size={16} className="text-emerald-500" />,
+      label: "Auto-fill",  count: summary.auto,
+      /* Gradient bg as inline style to avoid CSS specificity issues */
+      bg: "linear-gradient(135deg,#ecfdf5 0%,#d1fae5 100%)",
+      border: "rgba(16,185,129,0.2)",
+      num: "text-emerald-700",
+      iconBg: "rgba(16,185,129,0.12)",
     },
     {
-      icon: <Sparkles size={17} className="text-brand-500" />,
-      label: "AI answers",
-      count: summary.ai,
-      color: "from-brand-50 to-violet-50",
-      border: "border-brand-100",
-      text: "text-brand-700",
+      icon: <Sparkles size={16} className="text-brand-500" />,
+      label: "AI answers",  count: summary.ai,
+      bg: "linear-gradient(135deg,#eef2ff 0%,#ede9fe 100%)",
+      border: "rgba(99,102,241,0.2)",
+      num: "text-brand-700",
+      iconBg: "rgba(99,102,241,0.1)",
     },
     {
-      icon: <AlertTriangle size={17} className="text-amber-500" />,
-      label: "Need review",
-      count: summary.needsInput,
-      color: "from-amber-50 to-orange-50",
-      border: "border-amber-100",
-      text: "text-amber-700",
+      icon: <AlertTriangle size={16} className="text-amber-500" />,
+      label: "Need review",  count: summary.needsInput,
+      bg: "linear-gradient(135deg,#fffbeb 0%,#fef3c7 100%)",
+      border: "rgba(245,158,11,0.2)",
+      num: "text-amber-700",
+      iconBg: "rgba(245,158,11,0.1)",
     },
     {
-      icon: <Paperclip size={17} className="text-purple-500" />,
-      label: "Documents",
-      count: summary.documents,
-      color: "from-purple-50 to-fuchsia-50",
-      border: "border-purple-100",
-      text: "text-purple-700",
+      icon: <Paperclip size={16} className="text-purple-500" />,
+      label: "Documents",  count: summary.documents,
+      bg: "linear-gradient(135deg,#faf5ff 0%,#ede9fe 100%)",
+      border: "rgba(139,92,246,0.2)",
+      num: "text-purple-700",
+      iconBg: "rgba(139,92,246,0.1)",
     },
   ] : [];
 
   return (
     <div className="px-4 py-3 space-y-3">
 
-      {/* Page title chip */}
+      {/* Page title */}
       {pageTitle && (
         <div className="flex items-center gap-2 animate-fade-up">
-          <div className="w-1.5 h-1.5 rounded-full bg-brand-400 shrink-0" />
+          <div
+            className="w-2 h-2 rounded-full shrink-0"
+            style={{ background: "linear-gradient(135deg,#6366f1,#a855f7)" }}
+          />
           <span className="text-[11px] text-gray-400 truncate">{pageTitle}</span>
         </div>
       )}
 
       {hasFields ? (
         <>
-          {/* Field count hero */}
+          {/* Hero row — field count + coverage ring */}
           <div className="flex items-center justify-between animate-fade-up">
             <div>
-              <div className="text-2xl font-black text-gray-800 leading-none">{summary.total}</div>
+              <div className="text-3xl font-black text-gray-800 leading-none tracking-tight">{summary.total}</div>
               <div className="text-[11px] text-gray-400 mt-0.5 font-medium">fields detected</div>
             </div>
-            {/* Mini coverage ring */}
+            {/* Coverage ring */}
             <div className="relative w-14 h-14">
               <svg viewBox="0 0 56 56" className="w-full h-full -rotate-90">
                 <circle cx="28" cy="28" r="22" fill="none" stroke="#e0e7ff" strokeWidth="5" />
                 <circle
                   cx="28" cy="28" r="22" fill="none"
-                  stroke="url(#fillGrad)" strokeWidth="5"
+                  stroke="url(#coverGrad)" strokeWidth="5"
                   strokeLinecap="round"
-                  strokeDasharray={`${2 * Math.PI * 22}`}
-                  strokeDashoffset={`${2 * Math.PI * 22 * (1 - (summary.auto + summary.ai) / Math.max(summary.total, 1))}`}
-                  style={{ transition: "stroke-dashoffset 0.8s ease-out" }}
+                  strokeDasharray={2 * Math.PI * 22}
+                  strokeDashoffset={2 * Math.PI * 22 * (1 - (summary.auto + summary.ai) / Math.max(summary.total, 1))}
+                  style={{ transition: "stroke-dashoffset 0.9s ease-out" }}
                 />
                 <defs>
-                  <linearGradient id="fillGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <linearGradient id="coverGrad" x1="0%" y1="0%" x2="100%" y2="0%">
                     <stop offset="0%" stopColor="#6366f1" />
                     <stop offset="100%" stopColor="#a855f7" />
                   </linearGradient>
                 </defs>
               </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center rotate-0">
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="text-[11px] font-black text-brand-600">
-                  {Math.round(((summary.auto + summary.ai) / Math.max(summary.total, 1)) * 100)}%
+                  {Math.round((summary.auto + summary.ai) / Math.max(summary.total, 1) * 100)}%
                 </span>
-                <span className="text-[8px] text-gray-400 leading-none">filled</span>
+                <span className="text-[8px] text-gray-400">filled</span>
               </div>
             </div>
           </div>
 
-          {/* Metric cards grid */}
-          <div className="grid grid-cols-2 gap-2 animate-fade-up" style={{ animationDelay: "60ms" }}>
+          {/* Stat cards — use inline bg to beat CSS specificity */}
+          <div className="grid grid-cols-2 gap-2 animate-fade-up" style={{ animationDelay: "50ms" }}>
             {metrics.map((m) => (
               <div
                 key={m.label}
-                className={`metric-card flex items-center gap-3 p-3 bg-gradient-to-br ${m.color} border ${m.border} rounded-2xl`}
+                className="metric-card flex items-center gap-3 p-3"
+                style={{
+                  background: m.bg,
+                  border: `1px solid ${m.border}`,
+                  boxShadow: "0 2px 12px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.8)",
+                }}
               >
-                <div className="shrink-0 w-8 h-8 rounded-xl bg-white flex items-center justify-center shadow-sm">
+                {/* Icon in a tiny liquid blob */}
+                <div
+                  className="shrink-0 w-8 h-8 flex items-center justify-center"
+                  style={{
+                    background: m.iconBg,
+                    borderRadius: "55% 45% 40% 60% / 55% 40% 60% 45%",
+                    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.7)",
+                  }}
+                >
                   {m.icon}
                 </div>
                 <div>
-                  <div className={`text-xl font-black leading-none ${m.text}`}>{m.count}</div>
+                  <div className={`text-xl font-black leading-none ${m.num}`}>{m.count}</div>
                   <div className="text-[10px] text-gray-500 font-medium mt-0.5">{m.label}</div>
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Open side panel CTA */}
+          {/* CTA button */}
           <button
             onClick={openSidePanel}
-            className="animate-fade-up w-full text-white text-sm font-bold py-3 rounded-2xl flex items-center justify-center gap-2 transition-all active:scale-95 shadow-brand"
+            className="btn-water w-full text-white text-sm font-bold py-3 rounded-2xl flex items-center justify-center gap-2 animate-fade-up"
             style={{
-              background: "linear-gradient(135deg, #6366f1, #8b5cf6, #a855f7)",
-              animationDelay: "120ms",
+              background: "linear-gradient(135deg,#6366f1,#8b5cf6,#a855f7)",
+              boxShadow: "0 6px 22px rgba(99,102,241,0.45), inset 0 1px 0 rgba(255,255,255,0.2)",
+              animationDelay: "100ms",
             }}
           >
             <LayoutPanelLeft size={16} />
             Review &amp; Fill Form
           </button>
 
-          {/* Re-scan link */}
+          {/* Re-scan */}
           <button
             onClick={handleScan}
             disabled={scanning}
-            className="animate-fade-up w-full flex items-center justify-center gap-1.5 text-[11px] text-gray-400 hover:text-brand-600 disabled:opacity-40 transition-colors py-1"
-            style={{ animationDelay: "160ms" }}
+            className="w-full flex items-center justify-center gap-1.5 text-[11px] text-gray-400 hover:text-brand-600 disabled:opacity-40 transition-colors py-1 animate-fade-up"
+            style={{ animationDelay: "140ms" }}
           >
             <RefreshCw size={11} className={scanning ? "animate-spin" : ""} />
             {scanning ? "Re-scanning…" : "Re-scan page"}
           </button>
         </>
       ) : (
-        /* ── Empty / no form state ─────────────────────────────── */
-        <div className="flex flex-col items-center gap-4 py-6 animate-drop-in">
-          {/* Liquid drop scan button */}
-          <div className="relative flex items-center justify-center">
-            {scanning && (
-              <>
-                <div className="absolute w-24 h-24 rounded-full border-2 border-brand-300/50 animate-scan-ring" />
-                <div className="absolute w-24 h-24 rounded-full border-2 border-brand-300/30 animate-scan-ring" style={{ animationDelay: "0.9s" }} />
-              </>
-            )}
+        /* ── Empty state — liquid drop CTA ──────────────────────── */
+        <div className="flex flex-col items-center gap-5 py-6 animate-drop-in">
+          {/* Scan drop button with always-visible idle rings */}
+          <div className="relative flex items-center justify-center w-32 h-32">
+            {/* Outer ambient rings — always visible, brighter when scanning */}
+            <div
+              className="absolute w-28 h-28 rounded-full border-2 animate-scan-ring"
+              style={{
+                borderColor: scanning ? "rgba(99,102,241,0.45)" : "rgba(99,102,241,0.18)",
+                animationDuration: scanning ? "1.4s" : "2.4s",
+              }}
+            />
+            <div
+              className="absolute w-28 h-28 rounded-full border-2 animate-scan-ring"
+              style={{
+                borderColor: scanning ? "rgba(139,92,246,0.3)" : "rgba(139,92,246,0.12)",
+                animationDuration: scanning ? "1.4s" : "2.4s",
+                animationDelay: scanning ? "0.7s" : "1.2s",
+              }}
+            />
+            {/* Third subtle ring */}
+            <div
+              className="absolute w-28 h-28 rounded-full border animate-scan-ring"
+              style={{
+                borderColor: "rgba(168,85,247,0.1)",
+                animationDuration: "3s",
+                animationDelay: "1.8s",
+              }}
+            />
+
+            {/* The liquid drop button */}
             <button
               onClick={handleScan}
               disabled={scanning}
-              className="relative w-20 h-20 flex items-center justify-center transition-all duration-300 active:scale-90 disabled:cursor-wait"
+              className="relative w-[72px] h-[72px] flex items-center justify-center disabled:cursor-wait"
               style={{
-                background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 55%, #a855f7 100%)",
+                background: "linear-gradient(135deg,#6366f1 0%,#8b5cf6 55%,#a855f7 100%)",
                 borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
                 animation: `liquid ${scanning ? "2" : "5"}s ease-in-out infinite, glow 2.5s ease-in-out infinite`,
-                boxShadow: "0 8px 24px rgba(99, 102, 241, 0.45)",
+                boxShadow: "0 10px 28px rgba(99,102,241,0.5), inset 0 2px 0 rgba(255,255,255,0.3)",
+                transition: "transform 0.15s ease",
               }}
             >
-              <ScanSearch size={26} className={`text-white ${scanning ? "animate-pulse" : ""}`} />
+              {/* Water surface highlight */}
+              <div
+                className="absolute inset-0 pointer-events-none"
+                style={{
+                  background: "linear-gradient(160deg, rgba(255,255,255,0.35) 0%, transparent 55%)",
+                  borderRadius: "inherit",
+                }}
+              />
+              <ScanSearch size={24} className={`text-white relative z-10 ${scanning ? "animate-pulse" : ""}`} />
             </button>
           </div>
 
-          <div className="text-center space-y-1">
-            <p className="text-sm font-semibold text-gray-700">
-              {scanning ? "Scanning form fields…" : "Scan this page"}
+          <div className="text-center space-y-1.5">
+            <p className="text-sm font-bold text-gray-700">
+              {scanning ? "Scanning form fields…" : "Tap to scan this page"}
             </p>
-            <p className="text-[11px] text-gray-400">
+            <p className="text-[11px] text-gray-400 leading-relaxed">
               {scanning
-                ? "Detecting all input fields on this page"
-                : "Tap the drop to detect forms on this page"}
+                ? "Detecting all input fields on the page"
+                : "FormPilot will find every field and auto-fill with your profile"}
             </p>
           </div>
         </div>
       )}
 
-      {/* Profile nudge */}
+      {/* Profile setup nudge */}
       {hasFields && summary.auto === 0 && (
         <div
-          className="animate-fade-up flex items-start gap-2.5 text-xs bg-gradient-to-r from-brand-50 to-violet-50 border border-brand-100 text-brand-700 rounded-2xl p-3 cursor-pointer hover:from-brand-100 hover:to-violet-100 transition-colors"
+          className="flex items-start gap-2.5 rounded-2xl px-3 py-3 cursor-pointer transition-all animate-fade-up water-card hover:border-brand-200"
           onClick={onSetupProfile}
         >
-          <div className="shrink-0 w-5 h-5 rounded-full bg-brand-500 flex items-center justify-center mt-0.5">
+          <div
+            className="shrink-0 w-5 h-5 rounded-full flex items-center justify-center mt-0.5"
+            style={{ background: "linear-gradient(135deg,#6366f1,#a855f7)" }}
+          >
             <span className="text-white text-[9px] font-black">✦</span>
           </div>
-          <div>
-            <strong className="font-semibold">Set up your Profile</strong> so FormPilot can remember your details and auto-fill every form instantly.
-            <span className="ml-1 underline font-semibold">Go →</span>
+          <div className="text-[11px] text-gray-700 leading-relaxed">
+            <strong className="text-gray-900">Set up your Profile</strong> so FormPilot can remember your details and auto-fill every form.
+            <span className="ml-1 text-brand-600 font-semibold underline underline-offset-2">Go →</span>
           </div>
         </div>
       )}
 
       {/* API offline notice */}
       {apiOnline === false && (
-        <div className="animate-fade-up text-[11px] bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl p-3 leading-relaxed">
+        <div className="text-[11px] bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl p-3 leading-relaxed animate-fade-up">
           <strong>Local AI offline.</strong> Run <code className="font-mono bg-amber-100 px-1 rounded">npm start</code> in{" "}
-          <code className="font-mono bg-amber-100 px-1 rounded">local-api/</code> for AI-generated answers.
+          <code className="font-mono bg-amber-100 px-1 rounded">local-api/</code> for AI answers.
         </div>
       )}
     </div>

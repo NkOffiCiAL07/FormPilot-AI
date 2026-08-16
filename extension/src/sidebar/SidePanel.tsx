@@ -107,31 +107,35 @@ export default function SidePanel() {
 
   if (!state) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen gap-5 text-gray-400 px-8">
-        <div
-          className="w-20 h-20 flex items-center justify-center"
-          style={{
-            background: "linear-gradient(135deg, rgba(99,102,241,0.12), rgba(168,85,247,0.06))",
-            borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
-            animation: "liquid 5s ease-in-out infinite",
-          }}
-        >
-          <BrainCircuit size={30} className="text-brand-400" />
+      <div className="flex flex-col items-center justify-center h-screen gap-6 px-10">
+        {/* Large liquid blob with nested drop ripples */}
+        <div className="relative flex items-center justify-center w-32 h-32">
+          <div
+            className="absolute w-28 h-28 rounded-full border-2 border-brand-200/40"
+            style={{ animation: "scanRing 3s ease-out infinite" }}
+          />
+          <div
+            className="absolute w-28 h-28 rounded-full border border-brand-200/25"
+            style={{ animation: "scanRing 3s ease-out infinite", animationDelay: "1.5s" }}
+          />
+          <div
+            className="w-[72px] h-[72px] flex items-center justify-center"
+            style={{
+              background: "linear-gradient(135deg, rgba(99,102,241,0.14), rgba(168,85,247,0.08))",
+              borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
+              animation: "liquid 5s ease-in-out infinite",
+              boxShadow: "inset 0 2px 0 rgba(255,255,255,0.6), 0 4px 16px rgba(99,102,241,0.12)",
+            }}
+          >
+            <BrainCircuit size={28} className="text-brand-500" />
+          </div>
         </div>
         <div className="text-center">
-          <p className="text-sm font-semibold text-gray-600">No form detected yet</p>
-          <p className="text-xs text-gray-400 mt-1.5 leading-relaxed">
-            Navigate to a page with a form, then click the FormPilot icon to scan.
+          <p className="text-[14px] font-bold text-gray-700">No form detected yet</p>
+          <p className="text-[11px] text-gray-400 mt-1.5 leading-relaxed">
+            Open a page with a form, then click the FormPilot badge to scan.
           </p>
         </div>
-        <style>{`
-          @keyframes liquid {
-            0%,100%{border-radius:60% 40% 30% 70%/60% 30% 70% 40%}
-            25%{border-radius:45% 55% 55% 45%/55% 45% 55% 45%}
-            50%{border-radius:30% 60% 70% 40%/50% 60% 30% 60%}
-            75%{border-radius:55% 45% 40% 60%/40% 55% 45% 55%}
-          }
-        `}</style>
       </div>
     );
   }
@@ -139,7 +143,7 @@ export default function SidePanel() {
   const { summary } = state;
 
   return (
-    <div className="flex flex-col h-screen" style={{ background: "#f8f9ff" }}>
+    <div className="flex flex-col h-screen" style={{ background: "#eef2ff" }}>
 
       {/* ── Drop-shape gradient header ─────────────────────────────── */}
       <div className="sp-header px-4 py-3 flex items-center gap-2.5 relative z-10">
@@ -162,12 +166,13 @@ export default function SidePanel() {
         </div>
       </div>
 
-      {/* ── Summary chips ──────────────────────────────────────────── */}
-      <div className="flex gap-2 px-4 mt-6 pb-3 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+      {/* ── Summary chips (mt accounts for 24px wave height) ───────── */}
+      <div className="flex gap-1.5 px-4 pb-2 overflow-x-auto" style={{ marginTop: 28, scrollbarWidth: "none" }}>
         {summaryChips.map((c) => (
           <span
             key={c.label}
-            className={`shrink-0 text-[10px] font-semibold px-2.5 py-1 rounded-full ${c.color}`}
+            className={`shrink-0 text-[10px] font-bold px-2.5 py-1 rounded-full ${c.color}`}
+            style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}
           >
             {c.label}
           </span>
@@ -299,7 +304,7 @@ function FieldCard({
   }
 
   return (
-    <div className="field-card overflow-hidden">
+    <div className="field-card overflow-hidden" data-status={status}>
       {/* Card header */}
       <div
         className="flex items-start gap-2.5 px-3.5 py-3 cursor-pointer"
@@ -502,7 +507,7 @@ function DocumentFieldCard({
   }
 
   return (
-    <div className="field-card overflow-hidden">
+    <div className="field-card overflow-hidden" data-status="document">
       <div
         className="flex items-center gap-2.5 px-3.5 py-3 cursor-pointer"
         onClick={() => setExpanded((e) => !e)}

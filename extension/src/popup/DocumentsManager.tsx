@@ -268,7 +268,7 @@ function UploadField({ label, children }: { label: string; children: React.React
   );
 }
 
-const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2 text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-brand-400/40 focus:border-brand-300";
+const inputCls = "input-water";
 
 function DocumentCard({
   doc, delay, onDelete, onDownload,
