@@ -39,10 +39,10 @@ body {
 .sp-header::after {
   content: "";
   position: absolute;
-  bottom: -22px; left: 0; right: 0;
-  height: 24px;
+  bottom: -30px; left: 0; right: 0;
+  height: 34px;
   background: inherit;
-  border-radius: 0 0 55% 55% / 0 0 100% 100%;
+  border-radius: 0 0 60% 60% / 0 0 100% 100%;
   z-index: 1;
 }
 

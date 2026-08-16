@@ -151,27 +151,29 @@ export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps)
             {metrics.map((m) => (
               <div
                 key={m.label}
-                className="metric-card flex items-center gap-3 p-3"
+                className="metric-card flex items-center gap-3 p-3.5"
                 style={{
                   background: m.bg,
-                  border: `1px solid ${m.border}`,
-                  boxShadow: "0 2px 12px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.8)",
+                  border: `1.5px solid ${m.border}`,
+                  borderRadius: "22px 16px 22px 16px",
+                  boxShadow: "0 4px 18px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.85)",
                 }}
               >
-                {/* Icon in a tiny liquid blob */}
+                {/* Icon in an animated liquid blob */}
                 <div
-                  className="shrink-0 w-8 h-8 flex items-center justify-center"
+                  className="shrink-0 w-9 h-9 flex items-center justify-center"
                   style={{
                     background: m.iconBg,
-                    borderRadius: "55% 45% 40% 60% / 55% 40% 60% 45%",
-                    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.7)",
+                    borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
+                    animation: "liquid 5s ease-in-out infinite",
+                    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.75), 0 2px 6px rgba(0,0,0,0.05)",
                   }}
                 >
                   {m.icon}
                 </div>
                 <div>
-                  <div className={`text-xl font-black leading-none ${m.num}`}>{m.count}</div>
-                  <div className="text-[10px] text-gray-500 font-medium mt-0.5">{m.label}</div>
+                  <div className={`text-2xl font-black leading-none ${m.num}`}>{m.count}</div>
+                  <div className="text-[10px] text-gray-500 font-semibold mt-0.5">{m.label}</div>
                 </div>
               </div>
             ))}
@@ -180,10 +182,11 @@ export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps)
           {/* CTA button */}
           <button
             onClick={openSidePanel}
-            className="btn-water w-full text-white text-sm font-bold py-3 rounded-2xl flex items-center justify-center gap-2 animate-fade-up"
+            className="btn-water w-full text-white text-sm font-bold py-3.5 flex items-center justify-center gap-2 animate-fade-up"
             style={{
               background: "linear-gradient(135deg,#6366f1,#8b5cf6,#a855f7)",
-              boxShadow: "0 6px 22px rgba(99,102,241,0.45), inset 0 1px 0 rgba(255,255,255,0.2)",
+              borderRadius: "100px",
+              boxShadow: "0 8px 28px rgba(99,102,241,0.5), inset 0 1px 0 rgba(255,255,255,0.25)",
               animationDelay: "100ms",
             }}
           >

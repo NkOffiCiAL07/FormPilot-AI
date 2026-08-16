@@ -167,7 +167,7 @@ export default function SidePanel() {
       </div>
 
       {/* ── Summary chips (mt accounts for 24px wave height) ───────── */}
-      <div className="flex gap-1.5 px-4 pb-2 overflow-x-auto" style={{ marginTop: 28, scrollbarWidth: "none" }}>
+      <div className="flex gap-1.5 px-4 pb-2 overflow-x-auto" style={{ marginTop: 36, scrollbarWidth: "none" }}>
         {summaryChips.map((c) => (
           <span
             key={c.label}

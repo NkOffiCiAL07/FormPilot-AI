@@ -119,7 +119,7 @@ export default function App() {
       {showNudge && (
         <div
           className="mx-3 flex items-start gap-2.5 rounded-2xl px-3 py-2.5 cursor-pointer transition-all animate-fade-up water-card"
-          style={{ marginTop: 28, marginBottom: 4 }}
+          style={{ marginTop: 36, marginBottom: 4 }}
           onClick={() => switchTab("profile")}
         >
           <div
@@ -141,7 +141,7 @@ export default function App() {
       {showProgressBar && (
         <div
           className="mx-3 rounded-2xl px-3 py-2.5 animate-fade-up water-card"
-          style={{ marginTop: 28, marginBottom: 4 }}
+          style={{ marginTop: 36, marginBottom: 4 }}
         >
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[11px] text-brand-700 font-semibold">Profile completeness</span>
@@ -165,7 +165,7 @@ export default function App() {
         className="flex-1 overflow-y-auto"
         style={{
           /* Always pad top by wave height so first card isn't under the wave */
-          paddingTop: (showNudge || showProgressBar) ? 0 : 26,
+          paddingTop: (showNudge || showProgressBar) ? 0 : 34,
           opacity: tabChanging ? 0 : 1,
           transform: tabChanging ? "translateY(5px)" : "translateY(0)",
           transition: "opacity 0.11s ease, transform 0.11s ease",
@@ -177,14 +177,16 @@ export default function App() {
         {activeTab === "history"   && <HistoryPanel />}
       </div>
 
-      {/* ── Bottom drop-nav ───────────────────────────────────────── */}
-      <div
-        className="shrink-0 flex items-center justify-around px-2 py-2"
-        style={{
-          background: "linear-gradient(135deg,#6366f1 0%,#8b5cf6 55%,#a855f7 100%)",
-          borderTop: "1px solid rgba(255,255,255,0.1)",
-        }}
-      >
+      {/* ── Floating liquid dock nav ──────────────────────────────── */}
+      <div className="shrink-0 px-3 pb-3 pt-1">
+        <div
+          className="flex items-center justify-around px-2 py-2"
+          style={{
+            background: "linear-gradient(135deg,#6366f1 0%,#8b5cf6 55%,#a855f7 100%)",
+            borderRadius: "30px 26px 30px 26px",
+            boxShadow: "0 10px 36px rgba(99,102,241,0.5), 0 2px 8px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.2)",
+          }}
+        >
         {navItems.map(({ id, icon, label }) => (
           <button
             key={id}
@@ -207,6 +209,7 @@ export default function App() {
             )}
           </button>
         ))}
+        </div>
       </div>
     </div>
   );
