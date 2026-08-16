@@ -29,6 +29,7 @@ export default function SidePanel() {
   const [filter, setFilter] = useState<FilterTab>("all");
   const [filling, setFilling] = useState(false);
   const [filled, setFilled] = useState(false);
+  const [activeTabId, setActiveTabId] = useState<number | null>(null);
 
   useEffect(() => {
     loadState();
@@ -55,6 +56,7 @@ export default function SidePanel() {
   async function loadState() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
+    if (!activeTabId) setActiveTabId(tab.id);
     chrome.storage.session.get(`tab_${tab.id}`, (data) => {
       const s = data[`tab_${tab.id}`] as TabState | undefined;
       if (s) {
@@ -71,16 +73,23 @@ export default function SidePanel() {
   async function handleFill() {
     setFilling(true);
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) { setFilling(false); return; }
-    // Route through background so it reaches the correct frame
+    const tabId = tab?.id ?? activeTabId;
+    if (!tabId) { setFilling(false); return; }
+
+    // Fire-and-forget — don't await background response.
+    // MV3 service worker can drop async sendResponse before it fires,
+    // so we control the UI state ourselves via a short timeout.
     chrome.runtime.sendMessage({
       type: "FILL_FORM",
-      payload: { results, tabId: tab.id },
-    }, () => {
+      payload: { results, tabId },
+    }).catch(() => {});
+
+    // Show filled state after enough time for the fill to execute
+    setTimeout(() => {
       setFilling(false);
       setFilled(true);
       setTimeout(() => setFilled(false), 3000);
-    });
+    }, 900);
   }
 
   const filtered = results.filter((r) => {

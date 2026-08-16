@@ -153,13 +153,12 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, sender, sendResponse)
       case "FILL_FORM": {
         const payload = message.payload as { results: FieldResult[]; tabId?: number };
         const targetTabId = payload?.tabId ?? senderTabId ?? (await getActiveTabId());
-        if (!targetTabId) break;
-        try {
-          await chrome.tabs.sendMessage(targetTabId, { type: "FILL_FORM", payload: { results: payload.results } });
-        } catch (e) {
-          console.error("[FormPilot] Fill error:", e);
-        }
+        // Respond immediately — don't await the fill so MV3 service worker
+        // doesn't drop the response channel while waiting for content script
         sendResponse({ ok: true });
+        if (!targetTabId) break;
+        // Broadcast to ALL frames — the tagged elements live in the frame that scanned them
+        broadcastToAllFrames(targetTabId, { type: "FILL_FORM", payload: { results: payload.results } }).catch(() => {});
         break;
       }
 
