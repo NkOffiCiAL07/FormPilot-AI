@@ -73,6 +73,34 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, _sender, sendResponse
       break;
     }
 
+    case "CLICK_FILE_INPUT": {
+      const { fieldId } = message.payload as { fieldId: string };
+      // Find by fp-id first, then any file input
+      let el = document.querySelector<HTMLElement>(`[data-fp-id="${fieldId}"]`);
+      if (!el) el = document.querySelector<HTMLElement>('input[type="file"]');
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        setTimeout(() => (el as HTMLInputElement).click(), 300);
+        sendResponse({ ok: true });
+      } else {
+        sendResponse({ ok: false, error: "file input not found" });
+      }
+      break;
+    }
+
+    case "SCROLL_TO_FIELD": {
+      const { fieldId } = message.payload as { fieldId: string };
+      const el = document.querySelector<HTMLElement>(`[data-fp-id="${fieldId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.style.outline = "3px solid #4f6ef7";
+        el.style.outlineOffset = "3px";
+        setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 2000);
+      }
+      sendResponse({ ok: !!el });
+      break;
+    }
+
     default:
       sendResponse({ error: "unknown" });
   }

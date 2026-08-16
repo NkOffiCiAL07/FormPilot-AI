@@ -11,9 +11,10 @@ interface Summary {
 
 interface DashboardProps {
   apiOnline: boolean | null;
+  onSetupProfile?: () => void;
 }
 
-export default function Dashboard({ apiOnline }: DashboardProps) {
+export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [pageTitle, setPageTitle] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -158,9 +159,12 @@ export default function Dashboard({ apiOnline }: DashboardProps) {
       )}
 
       {/* Profile setup nudge */}
-      {hasFields && summary.auto === 0 && summary.needsInput === summary.total && (
-        <div className="text-xs bg-blue-50 border border-blue-200 text-blue-700 rounded-lg p-2">
-          Set up your <strong>Profile</strong> tab so FormPilot can auto-fill your details.
+      {hasFields && summary.auto === 0 && (
+        <div
+          className="text-xs bg-blue-50 border border-blue-200 text-blue-700 rounded-lg p-2 cursor-pointer hover:bg-blue-100 transition-colors"
+          onClick={onSetupProfile}
+        >
+          Set up your <strong>Profile</strong> tab so FormPilot can remember and auto-fill your details on every form.
         </div>
       )}
 

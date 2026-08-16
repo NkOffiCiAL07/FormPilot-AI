@@ -159,7 +159,10 @@ export type MessageType =
   | "OPEN_SIDEPANEL"
   | "GET_PROFILE"
   | "SAVE_PROFILE"
+  | "GET_DOCUMENTS"
   | "API_STATUS"
+  | "CLICK_FILE_INPUT"
+  | "SCROLL_TO_FIELD"
   | "ERROR";
 
 export interface ExtMessage {

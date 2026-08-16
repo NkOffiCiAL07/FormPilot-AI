@@ -197,6 +197,17 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, sender, sendResponse)
         break;
       }
 
+      case "CLICK_FILE_INPUT":
+      case "SCROLL_TO_FIELD": {
+        const payload = message.payload as { fieldId: string; tabId?: number };
+        const targetTabId = payload?.tabId ?? senderTabId ?? (await getActiveTabId());
+        sendResponse({ ok: true });
+        if (targetTabId) {
+          broadcastToAllFrames(targetTabId, { type: message.type, payload: { fieldId: payload.fieldId } }).catch(() => {});
+        }
+        break;
+      }
+
       case "API_STATUS": {
         const online = await checkApiStatus();
         sendResponse({ online });
