@@ -141,15 +141,11 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, sender, sendResponse)
       }
 
       case "SCAN_FORM": {
-        // Can come from popup (no senderTabId) — get the active tab ourselves
         const payload = message.payload as { tabId?: number } | undefined;
         const targetTabId = payload?.tabId ?? senderTabId ?? (await getActiveTabId());
         if (!targetTabId) break;
-        try {
-          await chrome.tabs.sendMessage(targetTabId, { type: "SCAN_FORM" });
-        } catch {
-          // tab may not have content script yet
-        }
+        // Broadcast to ALL frames — Workday/ATS forms are often in iframes
+        await broadcastToAllFrames(targetTabId, { type: "SCAN_FORM" });
         sendResponse({ ok: true });
         break;
       }
@@ -221,6 +217,22 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, sender, sendResponse)
 async function getActiveTabId(): Promise<number | undefined> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab?.id;
+}
+
+// Send a message to every frame in a tab (main + all iframes)
+async function broadcastToAllFrames(tabId: number, msg: ExtMessage): Promise<void> {
+  try {
+    const frames = await chrome.webNavigation.getAllFrames({ tabId });
+    if (!frames) return;
+    await Promise.allSettled(
+      frames.map((frame) =>
+        chrome.tabs.sendMessage(tabId, msg, { frameId: frame.frameId }).catch(() => {})
+      )
+    );
+  } catch {
+    // webNavigation not available — fall back to main frame only
+    chrome.tabs.sendMessage(tabId, msg).catch(() => {});
+  }
 }
 
 // ─── Lifecycle ────────────────────────────────────────────────────────────────

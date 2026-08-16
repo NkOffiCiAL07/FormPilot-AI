@@ -1,7 +1,6 @@
 import { NormalizedField, FieldType, SelectOption } from "../shared/types";
 
 let fieldCounter = 0;
-
 function genId(): string {
   return `fp_${Date.now()}_${fieldCounter++}`;
 }
@@ -11,97 +10,85 @@ function genId(): string {
 function resolveLabel(el: HTMLElement): string {
   // 1. <label for="id">
   if (el.id) {
-    const labelEl = document.querySelector<HTMLLabelElement>(`label[for="${CSS.escape(el.id)}"]`);
-    if (labelEl) return labelEl.innerText.trim();
+    const lbl = document.querySelector<HTMLLabelElement>(`label[for="${CSS.escape(el.id)}"]`);
+    if (lbl) return lbl.innerText.trim();
   }
 
   // 2. wrapping <label>
-  const wrappingLabel = el.closest("label");
-  if (wrappingLabel) {
-    const clone = wrappingLabel.cloneNode(true) as HTMLElement;
-    // remove child inputs so we only get the label text
+  const wrap = el.closest("label");
+  if (wrap) {
+    const clone = wrap.cloneNode(true) as HTMLElement;
     clone.querySelectorAll("input,select,textarea").forEach((c) => c.remove());
-    const text = clone.innerText.trim();
-    if (text) return text;
+    const t = clone.innerText.trim();
+    if (t) return t;
   }
 
-  // 3. aria-label / aria-labelledby
-  const ariaLabel = el.getAttribute("aria-label");
-  if (ariaLabel) return ariaLabel.trim();
+  // 3. aria-label
+  const al = el.getAttribute("aria-label");
+  if (al) return al.trim();
 
-  const labelledBy = el.getAttribute("aria-labelledby");
-  if (labelledBy) {
-    const texts = labelledBy
-      .split(/\s+/)
-      .map((id) => document.getElementById(id)?.innerText.trim())
-      .filter(Boolean);
+  // 4. aria-labelledby
+  const alb = el.getAttribute("aria-labelledby");
+  if (alb) {
+    const texts = alb.split(/\s+/).map((id) => document.getElementById(id)?.innerText.trim()).filter(Boolean);
     if (texts.length) return texts.join(" ");
   }
 
-  // 4. placeholder as fallback
-  const placeholder = (el as HTMLInputElement).placeholder;
-  if (placeholder) return placeholder;
-
-  // 5. preceding sibling text / nearby text
-  const parent = el.parentElement;
-  if (parent) {
-    // walk siblings before this element
-    let sibling = el.previousSibling;
-    while (sibling) {
-      if (sibling.nodeType === Node.ELEMENT_NODE) {
-        const text = (sibling as HTMLElement).innerText?.trim();
-        if (text && text.length < 200) return text;
-        break;
-      }
-      if (sibling.nodeType === Node.TEXT_NODE) {
-        const text = sibling.textContent?.trim();
-        if (text) return text;
-      }
-      sibling = sibling.previousSibling;
-    }
-
-    // parent text
-    const parentClone = parent.cloneNode(true) as HTMLElement;
-    parentClone.querySelectorAll("input,select,textarea,button").forEach((c) => c.remove());
-    const parentText = parentClone.innerText.trim();
-    if (parentText && parentText.length < 150) return parentText;
+  // 5. data-automation-id label (Workday pattern)
+  const autoId = el.getAttribute("data-automation-id");
+  if (autoId) {
+    const lblEl = document.querySelector(`[data-automation-id="${CSS.escape(autoId)}-label"]`);
+    if (lblEl) return (lblEl as HTMLElement).innerText.trim();
   }
 
-  return "";
+  // 6. Preceding element with text in same container
+  const parent = el.parentElement;
+  if (parent) {
+    let sib = el.previousElementSibling;
+    while (sib) {
+      const t = (sib as HTMLElement).innerText?.trim();
+      if (t && t.length < 200) return t;
+      sib = sib.previousElementSibling;
+    }
+    // grandparent preceding text
+    const gp = parent.parentElement;
+    if (gp) {
+      let gpSib = parent.previousElementSibling;
+      while (gpSib) {
+        const t = (gpSib as HTMLElement).innerText?.trim();
+        if (t && t.length < 150 && !t.includes("\n\n")) return t;
+        gpSib = gpSib.previousElementSibling;
+      }
+    }
+  }
+
+  // 7. placeholder fallback
+  return (el as HTMLInputElement).placeholder || "";
 }
 
 function resolveSectionContext(el: HTMLElement): string {
-  let ancestor = el.parentElement;
-  while (ancestor) {
-    if (ancestor.tagName === "FIELDSET") {
-      const legend = ancestor.querySelector("legend");
-      if (legend) return legend.innerText.trim();
+  let anc = el.parentElement;
+  while (anc && anc.tagName !== "BODY") {
+    if (anc.tagName === "FIELDSET") {
+      const leg = anc.querySelector("legend");
+      if (leg) return (leg as HTMLElement).innerText.trim();
     }
-    // look for a heading nearby
-    const headings = ancestor.querySelectorAll("h1,h2,h3,h4,h5,h6");
-    if (headings.length) {
-      return Array.from(headings)
-        .map((h) => (h as HTMLElement).innerText.trim())
-        .filter(Boolean)
-        .join(" > ");
+    // nearest heading sibling above us
+    const prev = anc.previousElementSibling;
+    if (prev && /^H[1-6]$/.test(prev.tagName)) {
+      return (prev as HTMLElement).innerText.trim();
     }
-    if (ancestor.tagName === "FORM" || ancestor.tagName === "BODY") break;
-    ancestor = ancestor.parentElement;
+    if (anc.tagName === "FORM") break;
+    anc = anc.parentElement;
   }
   return "";
 }
 
-function resolvePageContext(): string {
-  const title = document.title || "";
-  const h1 = document.querySelector("h1")?.innerText.trim() || "";
-  return [title, h1].filter(Boolean).join(" | ");
-}
-
 function resolveNearbyText(el: HTMLElement): string {
-  const parent = el.parentElement?.parentElement;
-  if (!parent) return "";
-  const clone = parent.cloneNode(true) as HTMLElement;
-  clone.querySelectorAll("input,select,textarea,button,script,style").forEach((c) => c.remove());
+  const container = el.parentElement?.parentElement || el.parentElement;
+  if (!container) return "";
+  const clone = container.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll("input,select,textarea,button,script,style,svg").forEach((c) => c.remove());
   return clone.innerText.trim().slice(0, 300);
 }
 
@@ -110,61 +97,89 @@ function resolveFieldType(el: HTMLElement): FieldType {
   if (tag === "textarea") return "textarea";
   if (tag === "select") return "select";
   if (tag === "input") {
-    const type = (el as HTMLInputElement).type?.toLowerCase() || "text";
-    const validTypes: FieldType[] = ["text", "email", "tel", "number", "password", "date", "url", "file", "hidden", "radio", "checkbox"];
-    return validTypes.includes(type as FieldType) ? (type as FieldType) : "text";
+    const t = ((el as HTMLInputElement).type || "text").toLowerCase();
+    const valid: FieldType[] = ["text","email","tel","number","password","date","url","file","hidden","radio","checkbox"];
+    return valid.includes(t as FieldType) ? (t as FieldType) : "text";
   }
-  // custom controls (contenteditable, role="combobox", etc.)
   return "custom";
 }
 
 function resolveOptions(el: HTMLElement): SelectOption[] {
-  const tag = el.tagName.toLowerCase();
-  if (tag === "select") {
+  if (el.tagName.toLowerCase() === "select") {
     return Array.from((el as HTMLSelectElement).options)
       .filter((o) => o.value)
       .map((o) => ({ value: o.value, label: o.text.trim() }));
   }
-  if ((el as HTMLInputElement).type === "radio" || (el as HTMLInputElement).type === "checkbox") {
-    // gather all same-name siblings
+  const t = (el as HTMLInputElement).type;
+  if (t === "radio" || t === "checkbox") {
     const name = (el as HTMLInputElement).name;
     if (name) {
-      return Array.from(document.querySelectorAll<HTMLInputElement>(`input[name="${CSS.escape(name)}"]`)).map((inp) => ({
-        value: inp.value,
-        label: resolveLabel(inp) || inp.value,
-      }));
+      return Array.from(
+        document.querySelectorAll<HTMLInputElement>(`input[name="${CSS.escape(name)}"]`)
+      ).map((inp) => ({ value: inp.value, label: resolveLabel(inp) || inp.value }));
     }
   }
   return [];
 }
 
-// ─── Main scanner ─────────────────────────────────────────────────────────────
+// ─── Visibility — use getBoundingClientRect instead of offsetParent
+// offsetParent is null for position:fixed elements (common in Workday modals/sticky forms)
+
+function isVisible(el: HTMLElement): boolean {
+  const style = window.getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+  if (parseFloat(style.opacity) === 0) return false;
+  // getBoundingClientRect works for all positioning contexts
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 || rect.height > 0;
+}
+
+function isInsideIgnoredArea(el: HTMLElement): boolean {
+  // Only skip true navigation/search bars — not form sections that happen to be in a header element
+  if (el.closest('[role="search"]')) return true;
+  // Skip only if directly inside <nav>, not a form inside a page that has a nav somewhere
+  const nav = el.closest("nav");
+  if (nav && !nav.querySelector("form,input,select,textarea")) return true;
+  return false;
+}
+
+// ─── Selectors — extended for Workday, Greenhouse, Lever, Ashby, custom ATSes
+
+const FORM_SELECTORS = [
+  "input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]):not([type=search])",
+  "textarea",
+  "select",
+  '[role="textbox"]',
+  '[role="combobox"]',
+  '[role="listbox"]',
+  '[role="spinbutton"]',
+  '[contenteditable="true"]',
+  // Workday specific
+  '[data-automation-id*="formField"]:not(label)',
+].join(", ");
+
+// ─── Normalize a single element into NormalizedField ─────────────────────────
 
 function normalizeElement(el: HTMLElement): NormalizedField | null {
   const fieldType = resolveFieldType(el);
   if (fieldType === "hidden") return null;
 
-  // skip already-processed
-  if (el.dataset.fpId) return null;
+  // Reuse existing ID if already tagged (re-scan returns same fields, not 0)
+  let id = el.dataset.fpId || "";
+  if (!id) {
+    id = genId();
+    el.dataset.fpId = id;
+  }
 
-  const id = genId();
-  el.dataset.fpId = id;
-
-  const label = resolveLabel(el);
+  const label      = resolveLabel(el);
   const placeholder = (el as HTMLInputElement).placeholder || "";
-  const name = (el as HTMLInputElement).name || "";
-  const elId = el.id || "";
-  const ariaLabel = el.getAttribute("aria-label") || "";
-  const required =
+  const name       = (el as HTMLInputElement).name || "";
+  const elId       = el.id || "";
+  const ariaLabel  = el.getAttribute("aria-label") || "";
+  const required   =
     (el as HTMLInputElement).required ||
     el.getAttribute("aria-required") === "true" ||
-    !!el.closest("[required]");
-
-  const options = resolveOptions(el);
-  const sectionContext = resolveSectionContext(el);
-  const pageContext = resolvePageContext();
-  const nearbyText = resolveNearbyText(el);
-  const acceptedFileTypes = (el as HTMLInputElement).accept || undefined;
+    !!el.getAttribute("required");
 
   return {
     id,
@@ -175,57 +190,46 @@ function normalizeElement(el: HTMLElement): NormalizedField | null {
     name,
     ariaLabel,
     required,
-    options,
-    sectionContext,
-    pageContext,
-    nearbyText,
-    ...(fieldType === "file" ? { acceptedFileTypes } : {}),
+    options: resolveOptions(el),
+    sectionContext: resolveSectionContext(el),
+    pageContext: [document.title, document.querySelector("h1")?.innerText.trim()].filter(Boolean).join(" | "),
+    nearbyText: resolveNearbyText(el),
+    ...(fieldType === "file" ? { acceptedFileTypes: (el as HTMLInputElement).accept || undefined } : {}),
   };
 }
 
-function isVisible(el: HTMLElement): boolean {
-  if (!el.offsetParent && el.tagName !== "BODY") return false;
-  const style = window.getComputedStyle(el);
-  return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
-}
-
-function isInsideIgnoredArea(el: HTMLElement): boolean {
-  return !!el.closest('[role="search"]') || !!el.closest("nav") || !!el.closest("header");
-}
-
-const FORM_SELECTORS = [
-  "input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image])",
-  "textarea",
-  "select",
-  '[role="combobox"]',
-  '[role="listbox"]',
-  '[contenteditable="true"]',
-].join(", ");
+// ─── Main scan ────────────────────────────────────────────────────────────────
 
 export function scanForms(): NormalizedField[] {
   const elements = document.querySelectorAll<HTMLElement>(FORM_SELECTORS);
   const fields: NormalizedField[] = [];
-  const seenNames = new Set<string>();
+  const seenRadioNames = new Set<string>();
 
   for (const el of Array.from(elements)) {
     if (!isVisible(el)) continue;
     if (isInsideIgnoredArea(el)) continue;
 
-    const type = (el as HTMLInputElement).type?.toLowerCase();
+    const type = (el as HTMLInputElement).type?.toLowerCase() || "";
     const name = (el as HTMLInputElement).name || "";
 
-    // de-duplicate radio groups
-    if (type === "radio" && name && seenNames.has(`radio_${name}`)) continue;
-    if (type === "radio" && name) seenNames.add(`radio_${name}`);
+    // Collapse radio groups to one representative element
+    if (type === "radio" && name) {
+      if (seenRadioNames.has(name)) continue;
+      seenRadioNames.add(name);
+    }
 
-    const field = normalizeElement(el);
-    if (field) fields.push(field);
+    try {
+      const field = normalizeElement(el);
+      if (field) fields.push(field);
+    } catch {
+      // malformed element — skip
+    }
   }
 
   return fields;
 }
 
-// ─── MutationObserver for SPA/dynamic forms ──────────────────────────────────
+// ─── MutationObserver for SPA / dynamic forms ────────────────────────────────
 
 export function watchForNewFields(callback: (fields: NormalizedField[]) => void): MutationObserver {
   let debounce: ReturnType<typeof setTimeout> | null = null;
@@ -233,8 +237,8 @@ export function watchForNewFields(callback: (fields: NormalizedField[]) => void)
   const observer = new MutationObserver(() => {
     if (debounce) clearTimeout(debounce);
     debounce = setTimeout(() => {
-      const newFields = scanForms();
-      if (newFields.length > 0) callback(newFields);
+      const fields = scanForms();
+      if (fields.length > 0) callback(fields);
     }, 600);
   });
 

@@ -2,37 +2,48 @@ import { scanForms, watchForNewFields } from "../engines/formScanner";
 import { fillAllFields, highlightFields } from "../engines/autofill";
 import { ExtMessage, FieldResult, NormalizedField } from "../shared/types";
 
-let currentFields: NormalizedField[] = [];
 let currentResults: FieldResult[] = [];
 let observer: MutationObserver | null = null;
 
-// Skip scanning in tiny/navigation frames to avoid noise
+// Safe cross-origin access — window.top from a cross-origin iframe throws SecurityError
+function safeTopHref(): string {
+  try { return window.top?.location.href ?? location.href; } catch { return location.href; }
+}
+function safeTopTitle(): string {
+  try { return window.top?.document.title ?? document.title; } catch { return document.title; }
+}
+
+// Skip noise frames (tracking pixels, tiny ad iframes)
 function shouldSkipFrame(): boolean {
-  if (window.self === window.top) return false; // always scan top frame
-  const w = window.innerWidth || document.documentElement.clientWidth;
-  const h = window.innerHeight || document.documentElement.clientHeight;
-  // Skip if the frame is too small to be a real form container
-  if (w < 100 || h < 100) return true;
-  // Skip known non-form iframes
-  const src = window.location.href;
-  const skipPatterns = ["/tracking", "/analytics", "/ads", "doubleclick", "googlesyndication", "facebook.net/tr"];
-  if (skipPatterns.some((p) => src.includes(p))) return true;
-  return false;
+  if (window.self === window.top) return false;
+  try {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    if (w < 200 || h < 200) return true;
+  } catch { return true; }
+  const src = location.href;
+  const skip = ["/tracking", "/pixel", "/analytics", "doubleclick", "googlesyndication", "facebook.net/tr", "google-analytics"];
+  return skip.some((p) => src.includes(p));
 }
 
 // ─── Scan & notify ────────────────────────────────────────────────────────────
 
 function doScan(): NormalizedField[] {
-  currentFields = scanForms();
-  return currentFields;
+  return scanForms();
 }
 
 function notifyBackground(fields: NormalizedField[]) {
   if (fields.length === 0) return;
+  console.debug(`[FormPilot] Sending ${fields.length} fields to background`);
   chrome.runtime.sendMessage<ExtMessage>({
     type: "FORM_SCANNED",
-    payload: { fields, url: window.top?.location.href ?? location.href, title: window.top?.document.title ?? document.title },
-  }).catch(() => {/* extension may be reloading */});
+    payload: {
+      fields,
+      url: safeTopHref(),
+      title: safeTopTitle(),
+      frameUrl: location.href,
+    },
+  }).catch((e) => console.debug("[FormPilot] sendMessage error:", e?.message));
 }
 
 // ─── Message handler ──────────────────────────────────────────────────────────
@@ -41,7 +52,8 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, _sender, sendResponse
   switch (message.type) {
     case "SCAN_FORM": {
       const fields = doScan();
-      sendResponse({ fields });
+      console.debug(`[FormPilot] Manual scan: ${fields.length} fields in ${location.href}`);
+      sendResponse({ fields, frameUrl: location.href });
       notifyBackground(fields);
       break;
     }
@@ -62,7 +74,7 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, _sender, sendResponse
     }
 
     default:
-      sendResponse({ error: "unknown message type" });
+      sendResponse({ error: "unknown" });
   }
 
   return true;
@@ -73,26 +85,25 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, _sender, sendResponse
 (function init() {
   if (shouldSkipFrame()) return;
 
-  function runScan() {
+  function runScan(label: string) {
     const fields = doScan();
+    console.debug(`[FormPilot] Auto-scan (${label}): ${fields.length} fields found in ${location.href}`);
     notifyBackground(fields);
   }
 
   if (document.readyState === "complete" || document.readyState === "interactive") {
-    runScan();
-    // Also try after a short delay — some SPAs hydrate late
-    setTimeout(runScan, 1500);
-    setTimeout(runScan, 4000);
+    runScan("immediate");
+    setTimeout(() => runScan("1.5s"), 1500);
+    setTimeout(() => runScan("4s"), 4000);
   } else {
     document.addEventListener("DOMContentLoaded", () => {
-      runScan();
-      setTimeout(runScan, 1500);
+      runScan("DOMContentLoaded");
+      setTimeout(() => runScan("DOMContentLoaded+1.5s"), 1500);
     });
   }
 
-  // Watch for SPA route changes and dynamically injected forms
-  observer = watchForNewFields((newFields) => {
-    currentFields = newFields;
-    notifyBackground(newFields);
+  observer = watchForNewFields((fields) => {
+    console.debug(`[FormPilot] MutationObserver: ${fields.length} fields in ${location.href}`);
+    notifyBackground(fields);
   });
 })();
