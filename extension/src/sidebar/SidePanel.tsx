@@ -32,8 +32,24 @@ export default function SidePanel() {
 
   useEffect(() => {
     loadState();
-    const interval = setInterval(loadState, 2000);
-    return () => clearInterval(interval);
+
+    // Listen for storage changes so the panel updates instantly when a scan completes
+    const listener = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string
+    ) => {
+      if (area !== "session") return;
+      chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+        if (tab?.id && changes[`tab_${tab.id}`]) loadState();
+      });
+    };
+    chrome.storage.onChanged.addListener(listener);
+    // Also poll as fallback in case the listener fires before tab id is known
+    const interval = setInterval(loadState, 3000);
+    return () => {
+      chrome.storage.onChanged.removeListener(listener);
+      clearInterval(interval);
+    };
   }, []);
 
   async function loadState() {

@@ -72,10 +72,15 @@ export default function Dashboard({ apiOnline }: DashboardProps) {
   async function openSidePanel() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
-    // Pass tabId explicitly — background sender.tab.id is undefined for popup messages
-    chrome.runtime.sendMessage({ type: "OPEN_SIDEPANEL", payload: { tabId: tab.id } }, () => {
-      window.close();
-    });
+    // chrome.sidePanel.open() MUST be called directly in the popup (user gesture context).
+    // Routing through background loses the gesture and Chrome silently rejects the call.
+    try {
+      await (chrome.sidePanel as any).setOptions({ tabId: tab.id, path: "sidepanel.html", enabled: true });
+      await (chrome.sidePanel as any).open({ tabId: tab.id });
+    } catch (e) {
+      console.error("[FormPilot] sidePanel.open error:", e);
+    }
+    window.close();
   }
 
   const hasFields = summary && summary.total > 0;
