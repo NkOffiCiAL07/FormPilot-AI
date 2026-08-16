@@ -519,24 +519,37 @@ function DocumentFieldCard({
 }) {
   const [expanded, setExpanded] = useState(true);
   const [selectedId, setSelectedId] = useState(recommended?.id ?? "");
+  const [downloaded, setDownloaded] = useState(false);
 
   const resumes = documents.filter((d) => d.category === "resume");
   const selected = documents.find((d) => d.id === selectedId) ?? recommended;
 
-  async function handleSelectFile() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) return;
-    chrome.runtime.sendMessage({ type: "CLICK_FILE_INPUT", payload: { fieldId, tabId: tab.id } }).catch(() => {});
-  }
-
-  function handleDownload() {
+  /* Download the resume and pulse-highlight the file upload area on the page.
+     Chrome blocks programmatic file-picker opening from extension scripts
+     (security restriction), so we download the file first and then visually
+     guide the user to the page's own upload button. */
+  async function handleDownloadAndHighlight() {
     if (!selected) return;
+
+    // 1. Download from the side-panel window context (always works)
     const url = base64ToObjectUrl(selected.data, selected.mimeType);
     const a = document.createElement("a");
     a.href = url;
     a.download = selected.filename;
+    document.body.appendChild(a);
     a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    setDownloaded(true);
+
+    // 2. Pulse-highlight the upload area on the page
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      chrome.runtime.sendMessage({
+        type: "HIGHLIGHT_UPLOAD_AREA",
+        payload: { fieldId, tabId: tab.id },
+      }).catch(() => {});
+    }
   }
 
   return (
@@ -570,7 +583,7 @@ function DocumentFieldCard({
                 {resumes.map((r) => (
                   <button
                     key={r.id}
-                    onClick={() => setSelectedId(r.id)}
+                    onClick={() => { setSelectedId(r.id); setDownloaded(false); }}
                     className={`w-full flex items-center gap-2.5 text-left px-3 py-2.5 rounded-xl border text-[12px] transition-all ${
                       selectedId === r.id
                         ? "border-brand-300 bg-brand-50 text-brand-800"
@@ -586,31 +599,50 @@ function DocumentFieldCard({
                 ))}
               </div>
 
+              {/* Step-by-step upload guide */}
+              {downloaded ? (
+                <div
+                  className="rounded-xl px-3 py-2.5 space-y-1.5"
+                  style={{ background: "linear-gradient(135deg,rgba(16,185,129,0.08),rgba(5,150,105,0.04))", border: "1.5px solid rgba(16,185,129,0.25)" }}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <Check size={12} className="text-emerald-600 shrink-0" />
+                    <span className="text-[11px] font-bold text-emerald-700">Resume downloaded to your Downloads folder!</span>
+                  </div>
+                  <p className="text-[11px] text-emerald-700 leading-relaxed pl-[18px]">
+                    Now click the <strong>upload button on the page</strong> (highlighted with a purple glow) and select <strong>{selected?.filename}</strong> from your Downloads folder.
+                  </p>
+                </div>
+              ) : (
+                <div
+                  className="rounded-xl px-3 py-2 space-y-0.5"
+                  style={{ background: "rgba(99,102,241,0.05)", border: "1px solid rgba(99,102,241,0.12)" }}
+                >
+                  <p className="text-[10px] font-bold text-brand-600 uppercase tracking-wider">How to upload</p>
+                  <p className="text-[11px] text-gray-600 leading-relaxed">
+                    Click <strong>↓ Download Resume</strong> below — then click the upload button on the page and pick the saved file.
+                  </p>
+                </div>
+              )}
+
               <div className="flex gap-2">
                 <button
-                  onClick={handleSelectFile}
-                  className="flex-1 flex items-center justify-center gap-1.5 text-white text-[12px] font-semibold py-2.5 rounded-xl"
-                  style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}
+                  onClick={handleDownloadAndHighlight}
+                  disabled={!selected}
+                  className="w-full flex items-center justify-center gap-1.5 text-white text-[12px] font-semibold py-2.5 rounded-xl disabled:opacity-50 transition-all active:scale-[0.98]"
+                  style={{
+                    background: downloaded
+                      ? "linear-gradient(135deg,#10b981,#059669)"
+                      : "linear-gradient(135deg,#6366f1,#8b5cf6)",
+                    boxShadow: downloaded
+                      ? "0 4px 14px rgba(16,185,129,0.35)"
+                      : "0 4px 14px rgba(99,102,241,0.35)",
+                  }}
                 >
                   <FolderOpen size={13} />
-                  Browse &amp; Upload
+                  {downloaded ? "Downloaded! Click upload on the page →" : "↓ Download Resume & Highlight Upload"}
                 </button>
-                {selected && (
-                  <button
-                    onClick={handleDownload}
-                    className="flex items-center gap-1 text-[12px] border border-gray-200 bg-white hover:border-gray-300 px-3 py-2 rounded-xl text-gray-600 transition-colors"
-                  >
-                    ↓ Save
-                  </button>
-                )}
               </div>
-
-              {selected && (
-                <p className="text-[11px] text-gray-400 leading-relaxed">
-                  Click <strong>Browse &amp; Upload</strong> to open the file picker, then select <strong>{selected.filename}</strong>.
-                  Use <strong>Save</strong> to download it first if needed.
-                </p>
-              )}
             </>
           )}
         </div>

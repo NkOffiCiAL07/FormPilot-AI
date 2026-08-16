@@ -262,7 +262,8 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, sender, sendResponse)
       }
 
       case "CLICK_FILE_INPUT":
-      case "SCROLL_TO_FIELD": {
+      case "SCROLL_TO_FIELD":
+      case "HIGHLIGHT_UPLOAD_AREA": {
         const payload = message.payload as { fieldId: string; tabId?: number };
         const targetTabId = payload?.tabId ?? senderTabId ?? (await getActiveTabId());
         sendResponse({ ok: true });

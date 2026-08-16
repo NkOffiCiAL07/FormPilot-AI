@@ -166,6 +166,7 @@ export type MessageType =
   | "SAVE_APPLICATION"
   | "GENERATE_COVER_LETTER"
   | "CLEAR_AI_MEMORY"
+  | "HIGHLIGHT_UPLOAD_AREA"
   | "ERROR";
 
 export interface ExtMessage {

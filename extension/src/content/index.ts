@@ -101,6 +101,51 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, _sender, sendResponse
       break;
     }
 
+    case "HIGHLIGHT_UPLOAD_AREA": {
+      const { fieldId } = message.payload as { fieldId: string };
+      // Find the file input, then walk up to find the visible clickable upload container
+      let fileEl = document.querySelector<HTMLElement>(`[data-fp-id="${fieldId}"]`)
+        || document.querySelector<HTMLElement>('input[type="file"]');
+
+      // Find the best visible ancestor/sibling to highlight (the custom upload button)
+      let highlightEl: HTMLElement | null = fileEl;
+      if (fileEl) {
+        // Walk up to find a container that has some visible area (> 40px tall)
+        let anc: HTMLElement | null = fileEl.parentElement;
+        while (anc && anc.tagName !== "BODY") {
+          const rect = anc.getBoundingClientRect();
+          if (rect.height > 40 && rect.width > 40) { highlightEl = anc; break; }
+          anc = anc.parentElement;
+        }
+        // Also look for a nearby <button> or <label> that is the visual trigger
+        const trigger = highlightEl?.querySelector<HTMLElement>("button, label, [role='button']");
+        if (trigger) highlightEl = trigger;
+      }
+
+      if (highlightEl) {
+        highlightEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        const savedOutline = highlightEl.style.outline;
+        const savedOffset = highlightEl.style.outlineOffset;
+        let tick = 0;
+        const pulse = setInterval(() => {
+          if (!highlightEl) { clearInterval(pulse); return; }
+          highlightEl.style.outline = tick % 2 === 0 ? "3px solid #6366f1" : "3px solid #a855f7";
+          highlightEl.style.outlineOffset = "4px";
+          if (++tick > 7) {
+            clearInterval(pulse);
+            setTimeout(() => {
+              if (highlightEl) {
+                highlightEl.style.outline = savedOutline;
+                highlightEl.style.outlineOffset = savedOffset;
+              }
+            }, 600);
+          }
+        }, 350);
+      }
+      sendResponse({ ok: !!highlightEl });
+      break;
+    }
+
     default:
       sendResponse({ error: "unknown" });
   }
