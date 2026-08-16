@@ -1,6 +1,7 @@
 import { ExtMessage, NormalizedField, UserProfile, FieldResult, defaultProfile } from "../shared/types";
 import { resolveAllFields, buildSummary } from "../engines/profileResolver";
 import { LOCAL_API_BASE } from "../shared/constants";
+import { saveApplicationRecord, ApplicationRecord } from "../shared/storage";
 
 // ─── Profile helpers ──────────────────────────────────────────────────────────
 
@@ -63,6 +64,48 @@ async function analyzeFields(fields: NormalizedField[]): Promise<FieldResult[]> 
   }
 
   return results;
+}
+
+// ─── Company / role extraction from URL + title ───────────────────────────────
+
+function extractDomain(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
+}
+
+function extractCompany(url: string, title: string): string {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "");
+    // ATS patterns: greenhouse.io/company, lever.co/company, workday subdomain
+    let m = url.match(/greenhouse\.io\/([^/?#]+)/);
+    if (m) return capitalize(m[1]);
+    m = url.match(/lever\.co\/([^/?#]+)/);
+    if (m) return capitalize(m[1]);
+    if (/\.workday\.com/.test(hostname)) return capitalize(hostname.split(".")[0]);
+    if (/\.rippling\.com/.test(hostname)) return capitalize(hostname.split(".")[0]);
+    // Title: "Role at Company - ..." or "Role | Company"
+    const atMatch = title.match(/\s[Aa][Tt]\s(.+?)(?:\s[-|]|$)/);
+    if (atMatch) return atMatch[1].trim();
+    const pipeMatch = title.split(/\s\|\s/);
+    if (pipeMatch.length > 1) return pipeMatch[pipeMatch.length - 1].trim();
+    const dashMatch = title.split(/\s[-–]\s/);
+    if (dashMatch.length > 1) return dashMatch[dashMatch.length - 1].trim();
+    return capitalize(hostname.split(".")[0]);
+  } catch {
+    return "Unknown";
+  }
+}
+
+function extractRole(title: string): string {
+  // Drop common suffixes
+  return title
+    .replace(/\s\|\s.*$/, "")
+    .replace(/\s[-–]\s.*$/, "")
+    .replace(/\s[Aa][Tt]\s.*$/, "")
+    .trim() || title;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 // ─── Side panel management ────────────────────────────────────────────────────
@@ -159,6 +202,27 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, sender, sendResponse)
         if (!targetTabId) break;
         // Broadcast to ALL frames — the tagged elements live in the frame that scanned them
         broadcastToAllFrames(targetTabId, { type: "FILL_FORM", payload: { results: payload.results } }).catch(() => {});
+
+        // Auto-save application history when a form is meaningfully filled
+        const filledCount = payload.results.filter(
+          (r) => (r.status === "auto" || r.status === "ai") && r.value
+        ).length;
+        if (filledCount > 0) {
+          const state = tabStates.get(targetTabId);
+          if (state?.url) {
+            const record: ApplicationRecord = {
+              id: crypto.randomUUID(),
+              company: extractCompany(state.url, state.title),
+              role: extractRole(state.title),
+              url: state.url,
+              domain: extractDomain(state.url),
+              date: new Date().toISOString(),
+              status: "applied",
+              fieldsCount: filledCount,
+            };
+            saveApplicationRecord(record).catch(() => {});
+          }
+        }
         break;
       }
 

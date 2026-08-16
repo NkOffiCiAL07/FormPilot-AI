@@ -3,6 +3,7 @@ import { UserProfile, defaultProfile } from "../shared/types";
 import ProfileEditor from "./ProfileEditor";
 import Dashboard from "./Dashboard";
 import DocumentsManager from "./DocumentsManager";
+import HistoryPanel from "./HistoryPanel";
 import {
   BrainCircuit, LayoutDashboard, User, FileText, Clock,
   Wifi, WifiOff, Loader2,
@@ -190,7 +191,7 @@ export default function App() {
           <button
             key={id}
             onClick={() => switchTab(id)}
-            className={`nav-pill flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl transition-all ${
+            className={`nav-pill relative flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl transition-all ${
               activeTab === id
                 ? "active text-brand-600"
                 : "text-white/60 hover:text-white/90"
@@ -202,10 +203,7 @@ export default function App() {
             <span className="text-[9px] font-semibold tracking-wide">{label}</span>
             {/* Incomplete profile dot */}
             {id === "profile" && completeness < 80 && completeness > 0 && (
-              <span
-                className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400 animate-badge-pop"
-                style={{ position: "absolute" }}
-              />
+              <span className="absolute top-1 right-2 w-2 h-2 rounded-full bg-amber-400 border-2 border-white/20 animate-badge-pop" />
             )}
           </button>
         ))}
@@ -214,22 +212,3 @@ export default function App() {
   );
 }
 
-function HistoryPanel() {
-  return (
-    <div className="flex flex-col items-center justify-center h-44 gap-3 px-6 animate-fade-up">
-      <div
-        className="w-16 h-16 flex items-center justify-center animate-liquid"
-        style={{
-          background: "linear-gradient(135deg, rgba(99,102,241,0.12), rgba(168,85,247,0.08))",
-          borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
-        }}
-      >
-        <Clock size={24} className="text-brand-500" />
-      </div>
-      <div className="text-center">
-        <div className="text-sm font-semibold text-gray-700">Application History</div>
-        <div className="text-xs text-gray-400 mt-0.5">Coming in a future update</div>
-      </div>
-    </div>
-  );
-}

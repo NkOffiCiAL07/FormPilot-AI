@@ -38,22 +38,25 @@ export default function ProfileEditor({ profile, onSave }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Section tabs */}
-      <div className="flex overflow-x-auto border-b border-gray-100 px-2 gap-1 py-1 text-xs">
+      {/* Section pill tabs */}
+      <div className="flex overflow-x-auto px-3 gap-1.5 py-2" style={{ scrollbarWidth: "none" }}>
         {sections.map((s) => (
           <button
             key={s.id}
             onClick={() => setActiveSection(s.id)}
-            className={`px-3 py-1.5 rounded-md whitespace-nowrap font-medium transition-colors ${
-              activeSection === s.id ? "bg-brand-100 text-brand-700" : "text-gray-500 hover:text-gray-700"
+            className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap border transition-all ${
+              activeSection === s.id
+                ? "text-white border-transparent"
+                : "text-gray-500 border-gray-200 bg-white hover:border-brand-300 hover:text-brand-600"
             }`}
+            style={activeSection === s.id ? { background: "linear-gradient(135deg,#6366f1,#8b5cf6)" } : {}}
           >
             {s.label}
           </button>
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-3">
         {activeSection === "personal" && (
           <PersonalSection data={data} update={update} updateAddress={updateAddress} />
         )}
@@ -71,13 +74,17 @@ export default function ProfileEditor({ profile, onSave }: Props) {
         )}
       </div>
 
-      <div className="p-4 border-t border-gray-100">
+      <div className="shrink-0 px-4 py-3 border-t border-gray-100">
         <button
           onClick={handleSave}
-          className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors"
+          className="w-full flex items-center justify-center gap-2 text-white text-[13px] font-bold py-3 rounded-2xl transition-all active:scale-95"
+          style={saved
+            ? { background: "linear-gradient(135deg, #10b981, #059669)", boxShadow: "0 4px 18px rgba(16,185,129,0.4)" }
+            : { background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 4px 18px rgba(99,102,241,0.4)" }
+          }
         >
-          <Save size={16} />
-          {saved ? "Saved!" : "Save Profile"}
+          <Save size={15} />
+          {saved ? "Profile Saved!" : "Save Profile"}
         </button>
       </div>
     </div>
@@ -89,13 +96,13 @@ export default function ProfileEditor({ profile, onSave }: Props) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1">
-      <label className="block text-xs font-medium text-gray-600">{label}</label>
+      <label className="block text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{label}</label>
       {children}
     </div>
   );
 }
 
-const inputCls = "w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500";
+const inputCls = "w-full border border-gray-200 rounded-xl px-3 py-2 text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-brand-400/40 focus:border-brand-300 transition-colors";
 
 function PersonalSection({
   data,
@@ -235,11 +242,11 @@ function EmploymentSection({
   return (
     <div className="space-y-4">
       {entries.map((entry) => (
-        <div key={entry.id} className="border border-gray-200 rounded-lg p-3 space-y-2">
+        <div key={entry.id} className="border border-brand-100 bg-brand-50/30 rounded-2xl p-3 space-y-2">
           <div className="flex justify-between items-center">
-            <span className="text-xs font-semibold text-gray-600">{entry.company || "New Entry"}</span>
-            <button onClick={() => removeEntry(entry.id)} className="text-red-400 hover:text-red-600">
-              <Trash2 size={14} />
+            <span className="text-[11px] font-bold text-brand-700">{entry.company || "New Entry"}</span>
+            <button onClick={() => removeEntry(entry.id)} className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+              <Trash2 size={13} />
             </button>
           </div>
           <Field label="Company">
@@ -265,7 +272,7 @@ function EmploymentSection({
           </Field>
         </div>
       ))}
-      <button onClick={addEntry} className="flex items-center gap-1 text-brand-600 text-sm font-medium hover:text-brand-700">
+      <button onClick={addEntry} className="flex items-center gap-1.5 text-brand-600 text-[12px] font-bold hover:text-brand-700 transition-colors">
         <Plus size={16} /> Add Employment
       </button>
     </div>
@@ -297,11 +304,11 @@ function EducationSection({
   return (
     <div className="space-y-4">
       {entries.map((entry) => (
-        <div key={entry.id} className="border border-gray-200 rounded-lg p-3 space-y-2">
+        <div key={entry.id} className="border border-violet-100 bg-violet-50/30 rounded-2xl p-3 space-y-2">
           <div className="flex justify-between items-center">
-            <span className="text-xs font-semibold text-gray-600">{entry.institution || "New Entry"}</span>
-            <button onClick={() => removeEntry(entry.id)} className="text-red-400 hover:text-red-600">
-              <Trash2 size={14} />
+            <span className="text-[11px] font-bold text-violet-700">{entry.institution || "New Entry"}</span>
+            <button onClick={() => removeEntry(entry.id)} className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+              <Trash2 size={13} />
             </button>
           </div>
           <Field label="Institution">
@@ -328,7 +335,7 @@ function EducationSection({
           </Field>
         </div>
       ))}
-      <button onClick={addEntry} className="flex items-center gap-1 text-brand-600 text-sm font-medium hover:text-brand-700">
+      <button onClick={addEntry} className="flex items-center gap-1.5 text-brand-600 text-[12px] font-bold hover:text-brand-700 transition-colors">
         <Plus size={16} /> Add Education
       </button>
     </div>
@@ -360,11 +367,11 @@ function CustomSection({
         Add any extra information you want FormPilot to use when filling forms.
       </p>
       {fields.map((field, idx) => (
-        <div key={idx} className="border border-gray-200 rounded-lg p-3 space-y-2">
-          <div className="flex justify-between">
-            <span className="text-xs font-semibold text-gray-600">Custom Field {idx + 1}</span>
-            <button onClick={() => removeField(idx)} className="text-red-400 hover:text-red-600">
-              <Trash2 size={14} />
+        <div key={idx} className="border border-amber-100 bg-amber-50/30 rounded-2xl p-3 space-y-2">
+          <div className="flex justify-between items-center">
+            <span className="text-[11px] font-bold text-amber-700">Custom Field {idx + 1}</span>
+            <button onClick={() => removeField(idx)} className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+              <Trash2 size={13} />
             </button>
           </div>
           <div className="grid grid-cols-2 gap-2">

@@ -1,4 +1,4 @@
-// Document storage in chrome.storage.local (base64, no local API required)
+// Shared local storage helpers — documents + application history
 
 export interface StoredDocument {
   id: string;
@@ -72,11 +72,72 @@ export function recommendResume(docs: StoredDocument[], context: string): Stored
   if (!context) return resumes[0];
 
   const ctxLower = context.toLowerCase();
-  // score by tag overlap
   const scored = resumes.map((r) => {
     const score = r.tags.reduce((s, t) => s + (ctxLower.includes(t.toLowerCase()) ? 1 : 0), 0);
     return { doc: r, score };
   });
   scored.sort((a, b) => b.score - a.score);
   return scored[0].doc;
+}
+
+// ─── Application History ──────────────────────────────────────────────────────
+
+export interface ApplicationRecord {
+  id: string;
+  company: string;
+  role: string;
+  url: string;
+  domain: string;
+  date: string;
+  status: "applied" | "interviewing" | "offer" | "rejected";
+  fieldsCount: number;
+  notes?: string;
+}
+
+const HISTORY_KEY = "fp_history";
+
+export async function getHistory(): Promise<ApplicationRecord[]> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(HISTORY_KEY, (res) => resolve(res[HISTORY_KEY] ?? []));
+  });
+}
+
+export async function saveApplicationRecord(record: ApplicationRecord): Promise<void> {
+  const history = await getHistory();
+  // Deduplicate: same URL within the last hour → update instead of new entry
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  const recentIdx = history.findIndex(
+    (r) => r.url === record.url && new Date(r.date).getTime() > oneHourAgo
+  );
+  if (recentIdx >= 0) {
+    history[recentIdx] = { ...history[recentIdx], fieldsCount: record.fieldsCount, date: record.date };
+  } else {
+    history.unshift(record);
+  }
+  return new Promise((resolve) =>
+    chrome.storage.local.set({ [HISTORY_KEY]: history.slice(0, 200) }, resolve)
+  );
+}
+
+export async function updateApplicationRecord(
+  id: string,
+  patch: Partial<Pick<ApplicationRecord, "status" | "notes">>
+): Promise<void> {
+  const history = await getHistory();
+  const idx = history.findIndex((r) => r.id === id);
+  if (idx >= 0) {
+    history[idx] = { ...history[idx], ...patch };
+    return new Promise((resolve) => chrome.storage.local.set({ [HISTORY_KEY]: history }, resolve));
+  }
+}
+
+export async function deleteApplicationRecord(id: string): Promise<void> {
+  const history = await getHistory();
+  return new Promise((resolve) =>
+    chrome.storage.local.set({ [HISTORY_KEY]: history.filter((r) => r.id !== id) }, resolve)
+  );
+}
+
+export async function clearHistory(): Promise<void> {
+  return new Promise((resolve) => chrome.storage.local.set({ [HISTORY_KEY]: [] }, resolve));
 }

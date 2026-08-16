@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   BrainCircuit, CheckCircle, Sparkles, AlertTriangle, Paperclip,
   ChevronDown, ChevronUp, Pencil, Check, Loader2, FolderOpen, LocateFixed,
-  ScanSearch, FileCheck,
+  ScanSearch, FileCheck, Copy, ClipboardCheck,
 } from "lucide-react";
 import { FieldResult, FillStatus } from "../shared/types";
 import { StoredDocument, getDocuments, recommendResume, base64ToObjectUrl } from "../shared/storage";
@@ -262,6 +262,15 @@ function FieldCard({
   );
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(result.value);
+  const [copied, setCopied] = useState(false);
+
+  function copyValue() {
+    if (!value) return;
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    }).catch(() => {});
+  }
 
   const { normalizedField: f, status, confidence, value, source } = result;
   const label = f.label || f.name || f.ariaLabel || f.placeholder || "Unnamed field";
@@ -386,7 +395,7 @@ function FieldCard({
                 </div>
               </div>
             ) : (
-              <div className="flex gap-2 items-start">
+              <div className="flex gap-1.5 items-start">
                 {value ? (
                   <div className="flex-1 text-[13px] text-gray-800 bg-white rounded-xl px-3 py-2 break-words whitespace-pre-wrap border border-gray-100 shadow-sm">
                     {value}
@@ -396,12 +405,28 @@ function FieldCard({
                     {result.userPrompt || "No value — please fill manually"}
                   </div>
                 )}
-                <button
-                  onClick={() => { setEditValue(value); setEditing(true); }}
-                  className="shrink-0 p-2 text-gray-300 hover:text-brand-500 rounded-xl hover:bg-brand-50 transition-colors"
-                >
-                  <Pencil size={13} />
-                </button>
+                <div className="flex flex-col gap-1 shrink-0">
+                  {value && (
+                    <button
+                      onClick={copyValue}
+                      className={`p-2 rounded-xl transition-colors ${
+                        copied
+                          ? "text-emerald-500 bg-emerald-50"
+                          : "text-gray-300 hover:text-brand-500 hover:bg-brand-50"
+                      }`}
+                      title="Copy to clipboard"
+                    >
+                      {copied ? <ClipboardCheck size={13} /> : <Copy size={13} />}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setEditValue(value); setEditing(true); }}
+                    className="p-2 text-gray-300 hover:text-brand-500 rounded-xl hover:bg-brand-50 transition-colors"
+                    title="Edit value"
+                  >
+                    <Pencil size={13} />
+                  </button>
+                </div>
               </div>
             )}
           </div>

@@ -163,6 +163,7 @@ export type MessageType =
   | "API_STATUS"
   | "CLICK_FILE_INPUT"
   | "SCROLL_TO_FIELD"
+  | "SAVE_APPLICATION"
   | "ERROR";
 
 export interface ExtMessage {

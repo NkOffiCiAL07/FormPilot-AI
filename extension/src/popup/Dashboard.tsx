@@ -211,13 +211,11 @@ export default function Dashboard({ apiOnline, onSetupProfile }: DashboardProps)
             <button
               onClick={handleScan}
               disabled={scanning}
-              className="relative w-20 h-20 flex items-center justify-center transition-all duration-300 active:scale-90 disabled:cursor-wait animate-glow"
+              className="relative w-20 h-20 flex items-center justify-center transition-all duration-300 active:scale-90 disabled:cursor-wait"
               style={{
-                background: scanning
-                  ? "linear-gradient(135deg, #6366f1, #8b5cf6)"
-                  : "linear-gradient(135deg, #6366f1 0%, #8b5cf6 55%, #a855f7 100%)",
+                background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 55%, #a855f7 100%)",
                 borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
-                animation: scanning ? "liquid 2s ease-in-out infinite, glow 2.5s ease-in-out infinite" : "liquid 5s ease-in-out infinite, glow 2.5s ease-in-out infinite",
+                animation: `liquid ${scanning ? "2" : "5"}s ease-in-out infinite, glow 2.5s ease-in-out infinite`,
                 boxShadow: "0 8px 24px rgba(99, 102, 241, 0.45)",
               }}
             >
