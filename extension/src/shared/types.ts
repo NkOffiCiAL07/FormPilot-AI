@@ -16,7 +16,11 @@ export type FieldType =
   | "hidden"
   | "custom";
 
-export type FillStatus = "auto" | "ai" | "needs_input" | "sensitive" | "document" | "skipped";
+// auto    – deterministic match, high confidence → filled automatically
+// review  – deterministic match, medium confidence (or always-review field) → filled, highlighted
+// ai      – AI-written draft → filled only after the user accepts it
+// memory  – reused from an answer the user approved earlier → filled only after the user accepts it
+export type FillStatus = "auto" | "review" | "ai" | "memory" | "needs_input" | "sensitive" | "document" | "skipped";
 
 export interface SelectOption {
   value: string;
@@ -38,6 +42,22 @@ export interface NormalizedField {
   pageContext: string;           // page title + h1
   nearbyText: string;            // surrounding text snippet
   acceptedFileTypes?: string;    // for file inputs
+  // Extra detection signals (all optional so older cached fields keep working)
+  autocomplete?: string;         // HTML autocomplete token, e.g. "given-name"
+  groupLabel?: string;           // question text for a radio/checkbox group (legend / radiogroup label)
+  attrHints?: string;            // id + data-automation-id / data-testid / data-qa, camelCase split
+  repeatIndex?: number;          // 0-based position among repeated blocks (employment #2, education #1…)
+  repeatCount?: number;          // how many repeated blocks exist
+  inShadow?: boolean;            // lives in a shadow root
+}
+
+export interface SimilarAnswer {
+  id: string;
+  question: string;
+  answer: string;
+  similarity: number;
+  contextMatch: boolean;
+  company: string;
 }
 
 // Result for a single field after AI/profile resolution
@@ -47,11 +67,19 @@ export interface FieldResult {
   status: FillStatus;
   confidence: number;           // 0–1
   value: string;
-  source: string;               // "profile.email", "ai_generated", "ask_user", etc.
-  reasoning?: string;           // why this value was chosen
-  alternatives?: string[];      // other candidate values
+  source: string;               // "profile", "ai_generated", "answer_memory", "ask_user", …
+  canonicalKey?: string;        // e.g. "currentCompany"
+  reason: string;               // human-readable explanation, e.g. "Matched label 'Current Organization'"
+  requiresReview: boolean;
+  suggestion?: string;          // best candidate when confidence is below the fill threshold
+  alternatives?: string[];
   needsUserInput?: boolean;
   userPrompt?: string;          // what to ask the user
+  missing?: string[];           // facts the AI needed but the profile lacks
+  similar?: SimilarAnswer[];
+  reused?: { id: string; question: string; similarity: number; company: string };
+  sanitized?: boolean;          // AI output contained a URL/email that was removed
+  injectionSuspected?: boolean; // page text looked like a prompt-injection attempt
 }
 
 // ─── User Profile ─────────────────────────────────────────────────────────────
@@ -91,6 +119,8 @@ export interface CustomField {
   value: string;
 }
 
+export type YesNo = "yes" | "no" | "";
+
 export interface UserProfile {
   // Personal
   firstName: string;
@@ -111,6 +141,16 @@ export interface UserProfile {
   github: string;
   portfolio: string;
   summary: string;
+
+  // Job preferences (always filled with "review" so you confirm them)
+  expectedSalary: string;
+  currentSalary: string;
+  noticePeriod: string;
+  workAuthorization: string;     // free text, e.g. "Citizen", "H-1B"
+  authorizedToWork: YesNo;       // "Are you legally authorized to work in …?"
+  requiresSponsorship: YesNo;    // "Will you require visa sponsorship?"
+  willingToRelocate: YesNo;
+  preferredLocations: string;
 
   // Employment history
   employment: EmploymentEntry[];
@@ -142,32 +182,59 @@ export const defaultProfile: UserProfile = {
   github: "",
   portfolio: "",
   summary: "",
+  expectedSalary: "",
+  currentSalary: "",
+  noticePeriod: "",
+  workAuthorization: "",
+  authorizedToWork: "",
+  requiresSponsorship: "",
+  willingToRelocate: "",
+  preferredLocations: "",
   employment: [],
   education: [],
   customFields: [],
   updatedAt: new Date().toISOString(),
 };
 
+// Stored profiles from older versions lack newer keys — always read through this.
+export function normalizeProfile(p: Partial<UserProfile> | null | undefined): UserProfile {
+  const src = (p ?? {}) as Partial<UserProfile>;
+  const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  return {
+    ...defaultProfile,
+    ...src,
+    address: { ...defaultProfile.address, ...(src.address ?? {}) },
+    skills: arr<string>(src.skills),
+    technologies: arr<string>(src.technologies),
+    employment: arr(src.employment),
+    education: arr(src.education),
+    customFields: arr(src.customFields),
+  };
+}
+
 // ─── Messages between extension parts ────────────────────────────────────────
 
 export type MessageType =
   | "SCAN_FORM"
   | "FORM_SCANNED"
-  | "ANALYZE_FIELDS"
+  | "PAGE_CONTEXT"
   | "FIELDS_ANALYZED"
   | "FILL_FORM"
+  | "UNDO_FILL"
+  | "FORM_SUBMITTED"
   | "OPEN_SIDEPANEL"
   | "GET_PROFILE"
   | "SAVE_PROFILE"
-  | "GET_DOCUMENTS"
   | "API_STATUS"
+  | "REANALYZE"
+  | "REGENERATE_FIELD"
+  | "SET_RESUME"
+  | "SAVE_APPLICATION"
   | "CLICK_FILE_INPUT"
   | "SCROLL_TO_FIELD"
-  | "SAVE_APPLICATION"
-  | "GENERATE_COVER_LETTER"
-  | "CLEAR_AI_MEMORY"
   | "HIGHLIGHT_UPLOAD_AREA"
-  | "ERROR";
+  | "GET_PAGE_CONTEXT"
+  | "SETTINGS_CHANGED";
 
 export interface ExtMessage {
   type: MessageType;
@@ -175,46 +242,27 @@ export interface ExtMessage {
   error?: string;
 }
 
-// ─── API Response ─────────────────────────────────────────────────────────────
+// ─── Page / job context ───────────────────────────────────────────────────────
 
-export interface AnalyzeResponse {
-  fields: FieldResult[];
-  pageContext: {
-    title: string;
-    company?: string;
-    role?: string;
-    jobDescription?: string;
-  };
-  summary: {
-    total: number;
-    auto: number;
-    ai: number;
-    needsInput: number;
-    documents: number;
-  };
-}
-
-// ─── Document types ───────────────────────────────────────────────────────────
-
-export interface Document {
-  id: string;
-  name: string;
-  category: "resume" | "certificate" | "transcript" | "id" | "cover_letter" | "other";
-  filename: string;
-  size: number;
-  uploadedAt: string;
-  tags: string[];
-}
-
-// ─── Application History ──────────────────────────────────────────────────────
-
-export interface ApplicationRecord {
-  id: string;
+// Everything here comes from the web page and is UNTRUSTED. It is only ever pattern-matched locally
+// or sent to the local API inside fenced data blocks — never treated as instructions.
+export interface PageContext {
+  url: string;
+  title: string;
   company: string;
   role: string;
-  website: string;
-  date: string;
-  resumeUsed?: string;
-  status: "applied" | "in_progress" | "rejected" | "offer";
-  url: string;
+  location: string;
+  description: string;   // job description text (trimmed)
+  hasJobPosting: boolean;
+}
+
+export const emptyPageContext: PageContext = {
+  url: "", title: "", company: "", role: "", location: "", description: "", hasJobPosting: false,
+};
+
+export interface FillStats {
+  success: number;
+  failed: number;
+  skipped: number;
+  filled: string[];   // fieldIds actually filled
 }
