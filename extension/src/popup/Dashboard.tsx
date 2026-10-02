@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   CheckCircle, Sparkles, AlertTriangle, Paperclip,
   LayoutPanelLeft, ScanSearch, RefreshCw, Copy, ClipboardCheck,
-  Mail, Phone, User, Linkedin,
+  Mail, Phone, User, Linkedin, Zap, TrendingUp,
 } from "lucide-react";
 import { UserProfile } from "../shared/types";
 
@@ -61,45 +61,39 @@ export default function Dashboard({ apiOnline, onSetupProfile, profile }: Dashbo
 
   const hasFields = summary && summary.total > 0;
 
-  /* ── Stat card definitions ─────────────────────────────────────── */
   const metrics = hasFields ? [
     {
       icon: <CheckCircle size={16} className="text-emerald-500" />,
       label: "Auto-fill",  count: summary.auto,
-      /* Gradient bg as inline style to avoid CSS specificity issues */
       bg: "linear-gradient(135deg,#ecfdf5 0%,#d1fae5 100%)",
-      border: "rgba(16,185,129,0.2)",
-      num: "text-emerald-700",
+      border: "rgba(16,185,129,0.2)", num: "text-emerald-700",
       iconBg: "rgba(16,185,129,0.12)",
     },
     {
       icon: <Sparkles size={16} className="text-brand-500" />,
       label: "AI answers",  count: summary.ai,
       bg: "linear-gradient(135deg,#eef2ff 0%,#ede9fe 100%)",
-      border: "rgba(99,102,241,0.2)",
-      num: "text-brand-700",
+      border: "rgba(99,102,241,0.2)", num: "text-brand-700",
       iconBg: "rgba(99,102,241,0.1)",
     },
     {
       icon: <AlertTriangle size={16} className="text-amber-500" />,
       label: "Need review",  count: summary.needsInput,
       bg: "linear-gradient(135deg,#fffbeb 0%,#fef3c7 100%)",
-      border: "rgba(245,158,11,0.2)",
-      num: "text-amber-700",
+      border: "rgba(245,158,11,0.2)", num: "text-amber-700",
       iconBg: "rgba(245,158,11,0.1)",
     },
     {
       icon: <Paperclip size={16} className="text-purple-500" />,
       label: "Documents",  count: summary.documents,
       bg: "linear-gradient(135deg,#faf5ff 0%,#ede9fe 100%)",
-      border: "rgba(139,92,246,0.2)",
-      num: "text-purple-700",
+      border: "rgba(139,92,246,0.2)", num: "text-purple-700",
       iconBg: "rgba(139,92,246,0.1)",
     },
   ] : [];
 
   return (
-    <div className="px-4 py-3 space-y-3">
+    <div className="px-3 py-2 space-y-2">
 
       {/* Page title */}
       {pageTitle && (
@@ -148,12 +142,12 @@ export default function Dashboard({ apiOnline, onSetupProfile, profile }: Dashbo
             </div>
           </div>
 
-          {/* Stat cards — use inline bg to beat CSS specificity */}
+          {/* Stat cards */}
           <div className="grid grid-cols-2 gap-2 animate-fade-up" style={{ animationDelay: "50ms" }}>
             {metrics.map((m) => (
               <div
                 key={m.label}
-                className="metric-card flex items-center gap-3 p-3.5"
+                className="metric-card flex items-center gap-2.5 p-2.5"
                 style={{
                   background: m.bg,
                   border: `1.5px solid ${m.border}`,
@@ -161,9 +155,8 @@ export default function Dashboard({ apiOnline, onSetupProfile, profile }: Dashbo
                   boxShadow: "0 4px 18px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.85)",
                 }}
               >
-                {/* Icon in an animated liquid blob */}
                 <div
-                  className="shrink-0 w-9 h-9 flex items-center justify-center"
+                  className="shrink-0 w-7 h-7 flex items-center justify-center"
                   style={{
                     background: m.iconBg,
                     borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
@@ -171,10 +164,10 @@ export default function Dashboard({ apiOnline, onSetupProfile, profile }: Dashbo
                     boxShadow: "inset 0 1px 0 rgba(255,255,255,0.75), 0 2px 6px rgba(0,0,0,0.05)",
                   }}
                 >
-                  {m.icon}
+                  {React.cloneElement(m.icon as React.ReactElement, { size: 13 })}
                 </div>
                 <div>
-                  <div className={`text-2xl font-black leading-none ${m.num}`}>{m.count}</div>
+                  <div className={`text-xl font-black leading-none ${m.num}`}>{m.count}</div>
                   <div className="text-[10px] text-gray-500 font-semibold mt-0.5">{m.label}</div>
                 </div>
               </div>
@@ -183,6 +176,9 @@ export default function Dashboard({ apiOnline, onSetupProfile, profile }: Dashbo
 
           {/* Quick Copy */}
           <QuickCopy profile={profile} />
+
+          {/* Profile Power */}
+          <ProfilePower profile={profile} />
 
           {/* CTA button */}
           <button
@@ -211,11 +207,9 @@ export default function Dashboard({ apiOnline, onSetupProfile, profile }: Dashbo
           </button>
         </>
       ) : (
-        /* ── Empty state — liquid drop CTA ──────────────────────── */
+        /* ── Empty state ── */
         <div className="flex flex-col items-center gap-5 py-6 animate-drop-in">
-          {/* Scan drop button with always-visible idle rings */}
           <div className="relative flex items-center justify-center w-32 h-32">
-            {/* Outer ambient rings — always visible, brighter when scanning */}
             <div
               className="absolute w-28 h-28 rounded-full border-2 animate-scan-ring"
               style={{
@@ -231,17 +225,11 @@ export default function Dashboard({ apiOnline, onSetupProfile, profile }: Dashbo
                 animationDelay: scanning ? "0.7s" : "1.2s",
               }}
             />
-            {/* Third subtle ring */}
             <div
               className="absolute w-28 h-28 rounded-full border animate-scan-ring"
-              style={{
-                borderColor: "rgba(168,85,247,0.1)",
-                animationDuration: "3s",
-                animationDelay: "1.8s",
-              }}
+              style={{ borderColor: "rgba(168,85,247,0.1)", animationDuration: "3s", animationDelay: "1.8s" }}
             />
 
-            {/* The liquid drop button */}
             <button
               onClick={handleScan}
               disabled={scanning}
@@ -254,7 +242,6 @@ export default function Dashboard({ apiOnline, onSetupProfile, profile }: Dashbo
                 transition: "transform 0.15s ease",
               }}
             >
-              {/* Water surface highlight */}
               <div
                 className="absolute inset-0 pointer-events-none"
                 style={{
@@ -275,6 +262,11 @@ export default function Dashboard({ apiOnline, onSetupProfile, profile }: Dashbo
                 ? "Detecting all input fields on the page"
                 : "FormPilot will find every field and auto-fill with your profile"}
             </p>
+          </div>
+
+          {/* Profile power even on empty state */}
+          <div className="w-full">
+            <ProfilePower profile={profile} />
           </div>
         </div>
       )}
@@ -348,6 +340,83 @@ function QuickCopy({ profile }: { profile: UserProfile }) {
             {copied === c.key ? <ClipboardCheck size={11} /> : c.icon}
             {copied === c.key ? "Copied!" : c.label}
           </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Profile Power ────────────────────────────────────────────────────────────
+
+function ProfilePower({ profile }: { profile: UserProfile }) {
+  const sections = [
+    {
+      label: "Personal",
+      score: Math.round(
+        [profile.firstName, profile.lastName, profile.email, profile.phone,
+         profile.address.city, profile.address.country].filter(Boolean).length / 6 * 100
+      ),
+      color: "#6366f1",
+    },
+    {
+      label: "Professional",
+      score: Math.round(
+        [profile.currentTitle, profile.currentCompany, profile.totalExperience,
+         profile.skills.length ? "x" : "", profile.summary].filter(Boolean).length / 5 * 100
+      ),
+      color: "#8b5cf6",
+    },
+    {
+      label: "Experience",
+      score: Math.min(100, profile.employment.length * 50),
+      color: "#a855f7",
+    },
+    {
+      label: "Education",
+      score: Math.min(100, profile.education.length * 100),
+      color: "#ec4899",
+    },
+  ];
+
+  const overall = Math.round(sections.reduce((s, sec) => s + sec.score, 0) / sections.length);
+  if (overall === 0) return null;
+
+  return (
+    <div className="water-card px-3 py-2.5 animate-fade-up" style={{ animationDelay: "90ms" }}>
+      <div className="flex items-center justify-between mb-2.5">
+        <div className="flex items-center gap-1.5">
+          <div
+            className="w-5 h-5 rounded-lg flex items-center justify-center"
+            style={{ background: "linear-gradient(135deg,#6366f1,#a855f7)" }}
+          >
+            <Zap size={11} className="text-white" />
+          </div>
+          <span className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Profile Power</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <TrendingUp size={10} className="text-brand-400" />
+          <span
+            className="text-[14px] font-black"
+            style={{ background: "linear-gradient(135deg,#6366f1,#a855f7)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}
+          >
+            {overall}%
+          </span>
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        {sections.map((sec) => (
+          <div key={sec.label} className="flex items-center gap-2">
+            <span className="text-[9px] text-gray-400 font-medium w-16 shrink-0">{sec.label}</span>
+            <div className="flex-1 h-1.5 rounded-full" style={{ background: "rgba(99,102,241,0.1)" }}>
+              <div
+                className="h-full rounded-full transition-all duration-700"
+                style={{ width: `${sec.score}%`, background: sec.color }}
+              />
+            </div>
+            <span className="text-[9px] font-bold w-7 text-right shrink-0" style={{ color: sec.color }}>
+              {sec.score}%
+            </span>
+          </div>
         ))}
       </div>
     </div>

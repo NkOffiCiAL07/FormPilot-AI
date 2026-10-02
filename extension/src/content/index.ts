@@ -68,6 +68,9 @@ chrome.runtime.onMessage.addListener((message: ExtMessage, _sender, sendResponse
 
     case "FILL_FORM": {
       const { results } = message.payload as { results: FieldResult[] };
+      // Re-tag current DOM elements before filling — handles SPA re-renders
+      // where original data-fp-id attributes may have been wiped by React/Vue
+      scanForms();
       const stats = fillAllFields(results);
       sendResponse({ stats });
       break;

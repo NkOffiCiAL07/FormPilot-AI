@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   BrainCircuit, CheckCircle, Sparkles, AlertTriangle, Paperclip,
   ChevronDown, ChevronUp, Pencil, Check, Loader2, FolderOpen, LocateFixed,
   ScanSearch, FileCheck, Copy, ClipboardCheck, FileText, WifiOff,
+  Search, Lightbulb, MessageSquare, ChevronRight, X,
 } from "lucide-react";
 import { FieldResult, FillStatus, UserProfile, defaultProfile } from "../shared/types";
 import { StoredDocument, getDocuments, recommendResume, base64ToObjectUrl, saveDocument } from "../shared/storage";
@@ -14,6 +15,7 @@ interface TabState {
   title: string;
   url: string;
   fieldCount?: number;
+  analyzing?: boolean;
 }
 
 type FilterTab = "all" | "auto" | "ai" | "needs_input" | "document";
@@ -36,6 +38,12 @@ export default function SidePanel() {
   const [documents, setDocuments] = useState<StoredDocument[]>([]);
   const [profile, setProfile] = useState<UserProfile>(defaultProfile);
   const [showCoverLetter, setShowCoverLetter] = useState(false);
+  const [showInterviewPrep, setShowInterviewPrep] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [jobContext, setJobContext] = useState("");
+  const [showJDPanel, setShowJDPanel] = useState(false);
+  // tracks which document the user selected per file-upload field (fieldId → docId)
+  const [docSelections, setDocSelections] = useState<Record<string, string>>({});
 
   useEffect(() => {
     loadState();
@@ -67,7 +75,12 @@ export default function SidePanel() {
     if (!activeTabId) setActiveTabId(tab.id);
     chrome.storage.session.get(`tab_${tab.id}`, (data) => {
       const s = data[`tab_${tab.id}`] as TabState | undefined;
-      if (s) { setState(s); setResults(s.results); }
+      if (s) {
+        setState(s);
+        setResults(s.results);
+        // Pre-fill job context from page title on first load
+        setJobContext((prev) => prev || s.title || "");
+      }
     });
   }
 
@@ -80,7 +93,41 @@ export default function SidePanel() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tab?.id ?? activeTabId;
     if (!tabId) { setFilling(false); return; }
+
+    // Fill all non-document fields
     chrome.runtime.sendMessage({ type: "FILL_FORM", payload: { results, tabId } }).catch(() => {});
+
+    // Handle document/file fields: auto-download the selected resume + trigger file picker
+    const docFields = results.filter((r) => r.status === "document");
+    for (const docField of docFields) {
+      const selectedDocId = docSelections[docField.fieldId]
+        ?? recommendResume(documents, pageContext)?.id;
+      const selectedDoc = documents.find((d) => d.id === selectedDocId);
+      if (selectedDoc) {
+        // Download to user's Downloads folder
+        const url = base64ToObjectUrl(selectedDoc.data, selectedDoc.mimeType);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = selectedDoc.filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+
+        // Try to open the file picker on the page (click the input)
+        chrome.runtime.sendMessage({
+          type: "CLICK_FILE_INPUT",
+          payload: { fieldId: docField.normalizedField.id, tabId },
+        }).catch(() => {});
+
+        // Pulse-highlight the upload area so user can see where to upload
+        chrome.runtime.sendMessage({
+          type: "HIGHLIGHT_UPLOAD_AREA",
+          payload: { fieldId: docField.normalizedField.id, tabId },
+        }).catch(() => {});
+      }
+    }
+
     setTimeout(() => {
       setFilling(false);
       setFilled(true);
@@ -94,25 +141,38 @@ export default function SidePanel() {
     chrome.runtime.sendMessage({ type: "SCROLL_TO_FIELD", payload: { fieldId, tabId: tab.id } }).catch(() => {});
   }
 
+  // Filter + search
   const filtered = results.filter((r) => {
-    if (filter === "all") return true;
-    if (filter === "needs_input") return r.status === "needs_input" || r.status === "sensitive";
-    return r.status === filter;
+    if (filter !== "all") {
+      if (filter === "needs_input") {
+        if (r.status !== "needs_input" && r.status !== "sensitive") return false;
+      } else if (r.status !== filter) {
+        return false;
+      }
+    }
+    if (searchQuery.trim()) {
+      const { normalizedField: f } = r;
+      const haystack = [f.label, f.name, f.ariaLabel, f.placeholder, f.sectionContext]
+        .filter(Boolean).join(" ").toLowerCase();
+      if (!haystack.includes(searchQuery.toLowerCase())) return false;
+    }
+    return true;
   });
 
   const pageContext = state?.title || state?.url || "";
 
   const summaryChips = state ? [
-    { label: `${state.summary.auto} auto`,   color: "bg-emerald-100 text-emerald-700" },
-    { label: `${state.summary.ai} AI`,        color: "bg-brand-100 text-brand-700" },
-    { label: `${state.summary.needsInput} review`, color: "bg-amber-100 text-amber-700" },
-    { label: `${state.summary.documents} docs`, color: "bg-purple-100 text-purple-700" },
+    { label: `${state.summary.auto} auto`,       color: "bg-emerald-100 text-emerald-700" },
+    { label: `${state.summary.ai} AI`,            color: "bg-brand-100 text-brand-700" },
+    { label: `${state.summary.needsInput} review`,color: "bg-amber-100 text-amber-700" },
+    { label: `${state.summary.documents} docs`,   color: "bg-purple-100 text-purple-700" },
   ] : [];
+
+  const fillableCount = results.filter(r => r.status === "auto" || r.status === "ai").length;
 
   if (!state) {
     return (
       <div className="flex flex-col items-center justify-center h-screen gap-6 px-10">
-        {/* Large liquid blob with nested drop ripples */}
         <div className="relative flex items-center justify-center w-32 h-32">
           <div
             className="absolute w-28 h-28 rounded-full border-2 border-brand-200/40"
@@ -149,7 +209,7 @@ export default function SidePanel() {
   return (
     <div className="flex flex-col h-screen" style={{ background: "#eef2ff" }}>
 
-      {/* ── Drop-shape gradient header ─────────────────────────────── */}
+      {/* ── Drop-shape gradient header ───────────────────────────────── */}
       <div className="sp-header px-4 py-3 flex items-center gap-2.5 relative z-10">
         <div
           className="w-8 h-8 flex items-center justify-center shrink-0"
@@ -170,8 +230,8 @@ export default function SidePanel() {
         </div>
       </div>
 
-      {/* ── Summary chips (mt accounts for 24px wave height) ───────── */}
-      <div className="flex gap-1.5 px-4 pb-2 overflow-x-auto" style={{ marginTop: 36, scrollbarWidth: "none" }}>
+      {/* ── Summary chips + JD toggle ──────────────────────────────── */}
+      <div className="flex items-center gap-1.5 px-4 pb-2 overflow-x-auto" style={{ marginTop: 36, scrollbarWidth: "none" }}>
         {summaryChips.map((c) => (
           <span
             key={c.label}
@@ -181,10 +241,55 @@ export default function SidePanel() {
             {c.label}
           </span>
         ))}
+        <button
+          onClick={() => setShowJDPanel((v) => !v)}
+          className="shrink-0 ml-auto flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full transition-all"
+          style={showJDPanel
+            ? { background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "white", boxShadow: "0 2px 8px rgba(99,102,241,0.35)" }
+            : { background: "rgba(99,102,241,0.08)", color: "#6366f1", border: "1px solid rgba(99,102,241,0.15)" }
+          }
+          title="Add job description for better AI answers"
+        >
+          <Lightbulb size={10} />
+          JD
+        </button>
       </div>
 
+      {/* ── Job Description Panel ─────────────────────────────────── */}
+      {showJDPanel && (
+        <div className="mx-3 mb-2 bg-white border border-brand-100 rounded-2xl px-3 py-3 space-y-2">
+          <div className="flex items-center gap-1.5">
+            <div
+              className="w-5 h-5 rounded-lg flex items-center justify-center shrink-0"
+              style={{ background: "linear-gradient(135deg,#6366f1,#a855f7)" }}
+            >
+              <Lightbulb size={10} className="text-white" />
+            </div>
+            <span className="text-[11px] font-bold text-gray-700">Job Context</span>
+            <span className="text-[10px] text-gray-400">· used by Cover Letter &amp; Interview Prep</span>
+          </div>
+          <textarea
+            className="w-full text-[11px] bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 resize-none focus:outline-none focus:border-brand-300 text-gray-700 leading-relaxed"
+            rows={4}
+            placeholder="Paste the job description here for more accurate AI answers, cover letter, and interview prep…"
+            value={jobContext}
+            onChange={(e) => setJobContext(e.target.value)}
+          />
+          <p className="text-[10px] text-gray-400">Auto-extracted from page title · paste full JD above for best results</p>
+        </div>
+      )}
+
+      {/* ── Analyzing banner (shown while AI phase runs) ───────────── */}
+      {state.analyzing && (
+        <div className="mx-3 mb-2 flex items-center gap-2 px-3 py-2 rounded-xl text-[11px] font-medium text-brand-700"
+          style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.18)" }}>
+          <Loader2 size={12} className="animate-spin shrink-0 text-brand-500" />
+          Analyzing open-ended fields with AI…
+        </div>
+      )}
+
       {/* ── Filter pills ───────────────────────────────────────────── */}
-      <div className="flex gap-1.5 px-4 pb-3 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+      <div className="flex gap-1.5 px-4 pb-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
         {(["all", "auto", "ai", "needs_input", "document"] as FilterTab[]).map((f) => {
           const count = f === "all"
             ? results.length
@@ -210,12 +315,36 @@ export default function SidePanel() {
         })}
       </div>
 
-      {/* ── Field cards ───────────────────────────────────────────── */}
+      {/* ── Search bar ─────────────────────────────────────────────── */}
+      {results.length > 4 && (
+        <div className="px-3 pb-2">
+          <div className="relative">
+            <input
+              className="w-full bg-white border border-gray-100 rounded-xl pl-3 pr-8 py-1.5 text-[12px] text-gray-700 focus:outline-none focus:border-brand-300 transition-colors shadow-sm"
+              placeholder="Search fields…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery ? (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2.5 top-1.5 text-gray-300 hover:text-gray-500"
+              >
+                <X size={12} />
+              </button>
+            ) : (
+              <Search size={12} className="absolute right-2.5 top-2 text-gray-300 pointer-events-none" />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Field cards ────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto px-3 pb-2 space-y-2">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-24 text-xs text-gray-400 gap-1.5">
             <ScanSearch size={20} className="text-gray-300" />
-            No fields in this category
+            {searchQuery ? `No fields matching "${searchQuery}"` : "No fields in this category"}
           </div>
         ) : (
           filtered.map((result, idx) => (
@@ -226,26 +355,42 @@ export default function SidePanel() {
                 pageContext={pageContext}
                 onUpdate={updateResult}
                 onScrollTo={() => scrollToField(result.fieldId)}
+                onSelectDoc={(fieldId, docId) =>
+                  setDocSelections((prev) => ({ ...prev, [fieldId]: docId }))
+                }
               />
             </div>
           ))
         )}
       </div>
 
-      {/* ── Cover Letter Generator ────────────────────────────────── */}
+      {/* ── Interview Prep Panel ───────────────────────────────────── */}
+      {showInterviewPrep && (
+        <InterviewPrepPanel
+          profile={profile}
+          company={state ? extractCompanyFromState(state) : ""}
+          role={state ? extractRoleFromState(state) : ""}
+          jobContext={jobContext}
+          onClose={() => setShowInterviewPrep(false)}
+        />
+      )}
+
+      {/* ── Cover Letter Panel ─────────────────────────────────────── */}
       {showCoverLetter && (
         <CoverLetterPanel
           profile={profile}
           company={state ? extractCompanyFromState(state) : ""}
           role={state ? extractRoleFromState(state) : ""}
+          jobContext={jobContext}
           onClose={() => setShowCoverLetter(false)}
           documents={documents}
         />
       )}
 
-      {/* ── Fill button footer ─────────────────────────────────────── */}
+      {/* ── Footer ────────────────────────────────────────────────── */}
       <div className="shrink-0 px-4 py-3 bg-white border-t border-gray-100">
-        <div className="flex gap-2">
+        <div className="flex gap-1.5">
+          {/* Fill button */}
           <button
             onClick={handleFill}
             disabled={filling}
@@ -256,12 +401,38 @@ export default function SidePanel() {
             ) : filled ? (
               <><FileCheck size={16} /> Done!</>
             ) : (
-              <>Fill Form <span className="text-white/70 font-normal text-xs">({results.filter(r => r.status === "auto" || r.status === "ai").length})</span></>
+              <>Fill Form <span className="text-white/70 font-normal text-xs">({fillableCount})</span></>
             )}
           </button>
+
+          {/* Interview Prep */}
           <button
-            onClick={() => setShowCoverLetter((v) => !v)}
-            className="shrink-0 flex items-center justify-center gap-1 px-3 py-2 rounded-[18px] text-[11px] font-bold transition-all active:scale-95"
+            onClick={() => {
+              setShowInterviewPrep((v) => !v);
+              setShowCoverLetter(false);
+            }}
+            className="shrink-0 flex flex-col items-center justify-center gap-0.5 px-3 py-2 rounded-[18px] text-[10px] font-bold transition-all active:scale-95"
+            style={{
+              background: showInterviewPrep
+                ? "linear-gradient(135deg,#8b5cf6,#a855f7)"
+                : "rgba(99,102,241,0.08)",
+              color: showInterviewPrep ? "white" : "#6366f1",
+              border: "1.5px solid rgba(99,102,241,0.2)",
+              boxShadow: showInterviewPrep ? "0 4px 14px rgba(139,92,246,0.35)" : "none",
+            }}
+            title="Generate interview prep"
+          >
+            <MessageSquare size={13} />
+            Prep
+          </button>
+
+          {/* Cover Letter */}
+          <button
+            onClick={() => {
+              setShowCoverLetter((v) => !v);
+              setShowInterviewPrep(false);
+            }}
+            className="shrink-0 flex flex-col items-center justify-center gap-0.5 px-3 py-2 rounded-[18px] text-[10px] font-bold transition-all active:scale-95"
             style={{
               background: showCoverLetter
                 ? "linear-gradient(135deg,#6366f1,#a855f7)"
@@ -272,8 +443,8 @@ export default function SidePanel() {
             }}
             title="Generate cover letter with AI"
           >
-            <Sparkles size={14} />
-            Cover Letter
+            <Sparkles size={13} />
+            Letter
           </button>
         </div>
         <p className="text-center text-[10px] text-gray-400 mt-1.5">
@@ -287,13 +458,14 @@ export default function SidePanel() {
 // ─── Field Card ───────────────────────────────────────────────────────────────
 
 function FieldCard({
-  result, documents, pageContext, onUpdate, onScrollTo,
+  result, documents, pageContext, onUpdate, onScrollTo, onSelectDoc,
 }: {
   result: FieldResult;
   documents: StoredDocument[];
   pageContext: string;
   onUpdate: (id: string, p: Partial<FieldResult>) => void;
   onScrollTo: () => void;
+  onSelectDoc?: (fieldId: string, docId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(
     result.status === "needs_input" || result.status === "sensitive" || result.status === "document"
@@ -317,11 +489,11 @@ function FieldCard({
     icon: React.ReactNode; dotColor: string; badge: string; badgeText: string;
   }> = {
     auto:        { icon: <CheckCircle size={13} />, dotColor: "bg-emerald-400", badge: "bg-emerald-50 text-emerald-700 border-emerald-100", badgeText: "auto" },
-    ai:          { icon: <Sparkles size={13} />,    dotColor: "bg-brand-400",   badge: "bg-brand-50 text-brand-700 border-brand-100",   badgeText: "AI"   },
-    needs_input: { icon: <AlertTriangle size={13} />, dotColor: "bg-amber-400", badge: "bg-amber-50 text-amber-700 border-amber-100",   badgeText: "review" },
-    sensitive:   { icon: <AlertTriangle size={13} />, dotColor: "bg-red-400",   badge: "bg-red-50 text-red-700 border-red-100",         badgeText: "sensitive" },
-    document:    { icon: <Paperclip size={13} />,   dotColor: "bg-purple-400", badge: "bg-purple-50 text-purple-700 border-purple-100", badgeText: "doc" },
-    skipped:     { icon: null,                       dotColor: "bg-gray-300",   badge: "bg-gray-50 text-gray-500 border-gray-100",      badgeText: "skip" },
+    ai:          { icon: <Sparkles size={13} />,    dotColor: "bg-brand-400",   badge: "bg-brand-50 text-brand-700 border-brand-100",       badgeText: "AI"   },
+    needs_input: { icon: <AlertTriangle size={13} />, dotColor: "bg-amber-400", badge: "bg-amber-50 text-amber-700 border-amber-100",       badgeText: "review" },
+    sensitive:   { icon: <AlertTriangle size={13} />, dotColor: "bg-red-400",   badge: "bg-red-50 text-red-700 border-red-100",             badgeText: "sensitive" },
+    document:    { icon: <Paperclip size={13} />,   dotColor: "bg-purple-400", badge: "bg-purple-50 text-purple-700 border-purple-100",     badgeText: "doc" },
+    skipped:     { icon: null,                       dotColor: "bg-gray-300",   badge: "bg-gray-50 text-gray-500 border-gray-100",           badgeText: "skip" },
   };
 
   const meta = statusMeta[status];
@@ -333,7 +505,15 @@ function FieldCard({
 
   if (status === "document") {
     const recommended = recommendResume(documents, pageContext);
-    return <DocumentFieldCard label={label} fieldId={f.id} recommended={recommended} documents={documents} />;
+    return (
+      <DocumentFieldCard
+        label={label}
+        fieldId={f.id}
+        recommended={recommended}
+        documents={documents}
+        onSelectDoc={onSelectDoc}
+      />
+    );
   }
 
   return (
@@ -343,7 +523,6 @@ function FieldCard({
         className="flex items-start gap-2.5 px-3.5 py-3 cursor-pointer"
         onClick={() => setExpanded((e) => !e)}
       >
-        {/* Status dot */}
         <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${meta.dotColor}`} />
 
         <div className="flex-1 min-w-0">
@@ -469,14 +648,12 @@ function FieldCard({
             )}
           </div>
 
-          {/* Source */}
           {source && source !== "ask_user" && source !== "no_match" && (
             <div className="text-[10px] text-gray-400">
               Source: <code className="bg-white border border-gray-100 px-1.5 py-0.5 rounded-lg">{source}</code>
             </div>
           )}
 
-          {/* Options picker */}
           {f.options.length > 0 && (
             <div>
               <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Options</div>
@@ -510,12 +687,13 @@ function FieldCard({
 // ─── Document Field Card ──────────────────────────────────────────────────────
 
 function DocumentFieldCard({
-  label, fieldId, recommended, documents,
+  label, fieldId, recommended, documents, onSelectDoc,
 }: {
   label: string;
   fieldId: string;
   recommended: StoredDocument | null;
   documents: StoredDocument[];
+  onSelectDoc?: (fieldId: string, docId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [selectedId, setSelectedId] = useState(recommended?.id ?? "");
@@ -524,14 +702,10 @@ function DocumentFieldCard({
   const resumes = documents.filter((d) => d.category === "resume");
   const selected = documents.find((d) => d.id === selectedId) ?? recommended;
 
-  /* Download the resume and pulse-highlight the file upload area on the page.
-     Chrome blocks programmatic file-picker opening from extension scripts
-     (security restriction), so we download the file first and then visually
-     guide the user to the page's own upload button. */
   async function handleDownloadAndHighlight() {
     if (!selected) return;
+    onSelectDoc?.(fieldId, selected.id);
 
-    // 1. Download from the side-panel window context (always works)
     const url = base64ToObjectUrl(selected.data, selected.mimeType);
     const a = document.createElement("a");
     a.href = url;
@@ -542,9 +716,12 @@ function DocumentFieldCard({
     setTimeout(() => URL.revokeObjectURL(url), 3000);
     setDownloaded(true);
 
-    // 2. Pulse-highlight the upload area on the page
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.id) {
+      chrome.runtime.sendMessage({
+        type: "CLICK_FILE_INPUT",
+        payload: { fieldId, tabId: tab.id },
+      }).catch(() => {});
       chrome.runtime.sendMessage({
         type: "HIGHLIGHT_UPLOAD_AREA",
         payload: { fieldId, tabId: tab.id },
@@ -583,7 +760,7 @@ function DocumentFieldCard({
                 {resumes.map((r) => (
                   <button
                     key={r.id}
-                    onClick={() => { setSelectedId(r.id); setDownloaded(false); }}
+                    onClick={() => { setSelectedId(r.id); setDownloaded(false); onSelectDoc?.(fieldId, r.id); }}
                     className={`w-full flex items-center gap-2.5 text-left px-3 py-2.5 rounded-xl border text-[12px] transition-all ${
                       selectedId === r.id
                         ? "border-brand-300 bg-brand-50 text-brand-800"
@@ -599,7 +776,6 @@ function DocumentFieldCard({
                 ))}
               </div>
 
-              {/* Step-by-step upload guide */}
               {downloaded ? (
                 <div
                   className="rounded-xl px-3 py-2.5 space-y-1.5"
@@ -676,14 +852,199 @@ function extractRoleFromState(state: { title: string }): string {
     .trim() || state.title;
 }
 
-// ─── Cover Letter Panel ───────────────────────────────────────────────────────
+// ─── Interview Prep Panel ─────────────────────────────────────────────────────
 
-function CoverLetterPanel({
-  profile, company, role, onClose, documents,
+interface QA { q: string; a: string; }
+
+function InterviewPrepPanel({
+  profile, company, role, jobContext, onClose,
 }: {
   profile: UserProfile;
   company: string;
   role: string;
+  jobContext: string;
+  onClose: () => void;
+}) {
+  const [questions, setQuestions] = useState<QA[]>([]);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [copied, setCopied] = useState<number | null>(null);
+
+  async function generate() {
+    setGenerating(true);
+    setError("");
+    setQuestions([]);
+    try {
+      const res = await fetch(`${LOCAL_API_BASE}/api/interview-prep`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile, company, role, jobDescription: jobContext }),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!res.ok) throw new Error("API error");
+      const data = await res.json();
+      if (data.error && !data.questions?.length) {
+        setError("AI is offline. Start the local API server to generate interview questions.");
+        return;
+      }
+      setQuestions(data.questions || []);
+    } catch {
+      setError("Could not reach the local AI. Run `npm start` in `local-api/` first.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  function copyAnswer(idx: number, answer: string) {
+    navigator.clipboard.writeText(answer).then(() => {
+      setCopied(idx);
+      setTimeout(() => setCopied(null), 1800);
+    });
+  }
+
+  return (
+    <div className="shrink-0 border-t border-gray-100 bg-white">
+      {/* Header */}
+      <div
+        className="flex items-center justify-between px-4 py-2.5"
+        style={{ background: "linear-gradient(135deg,rgba(139,92,246,0.08),rgba(168,85,247,0.05))" }}
+      >
+        <div className="flex items-center gap-2">
+          <div
+            className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: "linear-gradient(135deg,#8b5cf6,#a855f7)" }}
+          >
+            <MessageSquare size={12} className="text-white" />
+          </div>
+          <span className="text-[12px] font-bold text-gray-800">Interview Prep</span>
+          {(company || role) && (
+            <span className="text-[10px] text-gray-400 truncate max-w-[100px]">
+              {role && company ? `${role} @ ${company}` : role || company}
+            </span>
+          )}
+        </div>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 text-xs">✕</button>
+      </div>
+
+      <div className="px-4 pb-3 pt-2 space-y-2 max-h-80 overflow-y-auto">
+        {!questions.length && !generating && (
+          <div className="text-center py-2">
+            <p className="text-[11px] text-gray-500 mb-3 leading-relaxed">
+              Generate likely interview questions and model answers tailored to your profile and this role.
+            </p>
+            <button
+              onClick={generate}
+              className="flex items-center justify-center gap-2 w-full py-2.5 rounded-2xl text-[13px] font-bold text-white transition-all active:scale-95"
+              style={{
+                background: "linear-gradient(135deg,#8b5cf6,#a855f7)",
+                boxShadow: "0 6px 20px rgba(139,92,246,0.4)",
+              }}
+            >
+              <MessageSquare size={14} /> Generate Questions
+            </button>
+          </div>
+        )}
+
+        {generating && (
+          <div className="flex flex-col items-center gap-2 py-4">
+            <div
+              className="w-10 h-10 flex items-center justify-center"
+              style={{
+                background: "linear-gradient(135deg,rgba(139,92,246,0.15),rgba(168,85,247,0.08))",
+                borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
+                animation: "liquid 3s ease-in-out infinite",
+              }}
+            >
+              <Loader2 size={18} className="text-purple-500 animate-spin" />
+            </div>
+            <p className="text-[11px] text-gray-500">Crafting interview questions…</p>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+            <WifiOff size={13} className="text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-amber-700 leading-relaxed">{error}</p>
+          </div>
+        )}
+
+        {questions.length > 0 && (
+          <>
+            <div className="space-y-1.5">
+              {questions.map((qa, idx) => (
+                <div
+                  key={idx}
+                  className="rounded-xl border overflow-hidden transition-all"
+                  style={{
+                    borderColor: expanded === idx ? "rgba(139,92,246,0.3)" : "rgba(0,0,0,0.06)",
+                    background: expanded === idx ? "rgba(139,92,246,0.03)" : "white",
+                  }}
+                >
+                  {/* Question row */}
+                  <button
+                    onClick={() => setExpanded(expanded === idx ? null : idx)}
+                    className="w-full flex items-start gap-2 px-3 py-2.5 text-left"
+                  >
+                    <span
+                      className="shrink-0 text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center mt-0.5"
+                      style={{ background: "linear-gradient(135deg,#8b5cf6,#a855f7)", color: "white" }}
+                    >
+                      {idx + 1}
+                    </span>
+                    <span className="flex-1 text-[12px] font-semibold text-gray-800 leading-snug">{qa.q}</span>
+                    <ChevronRight
+                      size={12}
+                      className="shrink-0 text-gray-300 mt-0.5 transition-transform"
+                      style={{ transform: expanded === idx ? "rotate(90deg)" : "rotate(0deg)" }}
+                    />
+                  </button>
+
+                  {/* Answer */}
+                  {expanded === idx && (
+                    <div className="px-3 pb-3 pt-1 space-y-2">
+                      <div className="text-[11px] text-gray-700 leading-relaxed bg-white rounded-lg px-3 py-2 border border-gray-100">
+                        {qa.a}
+                      </div>
+                      <button
+                        onClick={() => copyAnswer(idx, qa.a)}
+                        className="flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full transition-all"
+                        style={
+                          copied === idx
+                            ? { background: "rgba(16,185,129,0.1)", color: "#059669", border: "1px solid rgba(16,185,129,0.2)" }
+                            : { background: "rgba(139,92,246,0.08)", color: "#7c3aed", border: "1px solid rgba(139,92,246,0.15)" }
+                        }
+                      >
+                        {copied === idx ? <ClipboardCheck size={10} /> : <Copy size={10} />}
+                        {copied === idx ? "Copied!" : "Copy answer"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={generate}
+              className="w-full text-center text-[10px] text-gray-400 hover:text-purple-500 transition-colors py-1"
+            >
+              ↻ Regenerate
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Cover Letter Panel ───────────────────────────────────────────────────────
+
+function CoverLetterPanel({
+  profile, company, role, jobContext, onClose, documents,
+}: {
+  profile: UserProfile;
+  company: string;
+  role: string;
+  jobContext: string;
   onClose: () => void;
   documents: StoredDocument[];
 }) {
@@ -701,14 +1062,17 @@ function CoverLetterPanel({
       const res = await fetch(`${LOCAL_API_BASE}/api/cover-letter`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ profile, company, role, jobContext: `${role} at ${company}` }),
+        body: JSON.stringify({ profile, company, role, jobContext }),
         signal: AbortSignal.timeout(60000),
       });
       if (!res.ok) throw new Error("API error");
       const data = await res.json();
-      if (data.error && !data.letter) { setError("AI is offline. Start the local API server to generate cover letters."); return; }
+      if (data.error && !data.letter) {
+        setError("AI is offline. Start the local API server to generate cover letters.");
+        return;
+      }
       setLetter(data.letter || "");
-    } catch (e: unknown) {
+    } catch {
       setError("Could not reach the local AI. Run `npm start` in `local-api/` first.");
     } finally {
       setGenerating(false);
@@ -753,7 +1117,7 @@ function CoverLetterPanel({
       >
         <div className="flex items-center gap-2">
           <div
-            className="w-6 h-6 rounded-lg flex items-center justify-center"
+            className="w-6 h-6 rounded-lg flex items-center justify-center shrink-0"
             style={{ background: "linear-gradient(135deg,#6366f1,#a855f7)" }}
           >
             <FileText size={12} className="text-white" />

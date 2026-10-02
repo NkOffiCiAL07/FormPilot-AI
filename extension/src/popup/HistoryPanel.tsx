@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Clock, ExternalLink, Trash2, CheckCircle2, MessageCircle,
   PartyPopper, XCircle, ChevronDown, StickyNote, Inbox,
+  List, LayoutGrid, ArrowRight,
 } from "lucide-react";
 import {
   ApplicationRecord,
@@ -12,6 +13,7 @@ import {
 } from "../shared/storage";
 
 type Status = ApplicationRecord["status"];
+type ViewMode = "list" | "kanban";
 
 const STATUS_META: Record<Status, {
   label: string;
@@ -19,10 +21,10 @@ const STATUS_META: Record<Status, {
   pill: string;
   dot: string;
 }> = {
-  applied:     { label: "Applied",     icon: <CheckCircle2 size={11} />,   pill: "bg-brand-50 text-brand-700 border-brand-200",    dot: "bg-brand-400" },
-  interviewing:{ label: "Interviewing",icon: <MessageCircle size={11} />,  pill: "bg-amber-50 text-amber-700 border-amber-200",    dot: "bg-amber-400" },
+  applied:     { label: "Applied",     icon: <CheckCircle2 size={11} />,   pill: "bg-brand-50 text-brand-700 border-brand-200",       dot: "bg-brand-400"   },
+  interviewing:{ label: "Interviewing",icon: <MessageCircle size={11} />,  pill: "bg-amber-50 text-amber-700 border-amber-200",       dot: "bg-amber-400"   },
   offer:       { label: "Offer! 🎉",   icon: <PartyPopper size={11} />,   pill: "bg-emerald-50 text-emerald-700 border-emerald-200", dot: "bg-emerald-400" },
-  rejected:    { label: "Rejected",    icon: <XCircle size={11} />,        pill: "bg-red-50 text-red-500 border-red-200",          dot: "bg-red-400" },
+  rejected:    { label: "Rejected",    icon: <XCircle size={11} />,        pill: "bg-red-50 text-red-500 border-red-200",             dot: "bg-red-400"     },
 };
 
 const ALL_STATUSES: Status[] = ["applied", "interviewing", "offer", "rejected"];
@@ -43,6 +45,7 @@ export default function HistoryPanel() {
   const [history, setHistory] = useState<ApplicationRecord[]>([]);
   const [filterStatus, setFilterStatus] = useState<Status | "all">("all");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
 
   useEffect(() => {
     load();
@@ -115,8 +118,8 @@ export default function HistoryPanel() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Stats strip */}
-      <div className="flex gap-2 px-4 pt-3 pb-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+      {/* Stats strip + view toggle */}
+      <div className="flex items-center gap-1.5 px-4 pt-3 pb-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
         {(["all", ...ALL_STATUSES] as const).map((s) => {
           const count = counts[s];
           if (s !== "all" && count === 0) return null;
@@ -140,27 +143,64 @@ export default function HistoryPanel() {
             </button>
           );
         })}
+        {/* View mode toggle */}
+        <div
+          className="ml-auto shrink-0 flex items-center gap-0.5 p-0.5 rounded-full"
+          style={{ background: "rgba(99,102,241,0.1)" }}
+        >
+          <button
+            onClick={() => setViewMode("list")}
+            className="p-1.5 rounded-full transition-all"
+            style={viewMode === "list"
+              ? { background: "white", color: "#6366f1", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" }
+              : { color: "#9ca3af" }}
+            title="List view"
+          >
+            <List size={11} />
+          </button>
+          <button
+            onClick={() => setViewMode("kanban")}
+            className="p-1.5 rounded-full transition-all"
+            style={viewMode === "kanban"
+              ? { background: "white", color: "#6366f1", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" }
+              : { color: "#9ca3af" }}
+            title="Kanban view"
+          >
+            <LayoutGrid size={11} />
+          </button>
+        </div>
       </div>
 
-      {/* Card list */}
-      <div className="flex-1 overflow-y-auto px-3 pb-2 space-y-2">
-        {filtered.length === 0 ? (
-          <div className="flex items-center justify-center h-20 text-xs text-gray-400">
-            No applications with this status
-          </div>
-        ) : (
-          filtered.map((rec, idx) => (
-            <ApplicationCard
-              key={rec.id}
-              record={rec}
-              delay={idx * 40}
-              onStatusChange={(s) => handleStatusChange(rec.id, s)}
-              onNotesChange={(n) => handleNotesChange(rec.id, n)}
-              onDelete={() => handleDelete(rec.id)}
-            />
-          ))
-        )}
-      </div>
+      {/* Content area */}
+      {viewMode === "kanban" ? (
+        <div className="flex-1 overflow-hidden">
+          <KanbanView
+            history={history}
+            onStatusChange={handleStatusChange}
+            onDelete={handleDelete}
+            onNotesChange={handleNotesChange}
+          />
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto px-3 pb-2 space-y-2">
+          {filtered.length === 0 ? (
+            <div className="flex items-center justify-center h-20 text-xs text-gray-400">
+              No applications with this status
+            </div>
+          ) : (
+            filtered.map((rec, idx) => (
+              <ApplicationCard
+                key={rec.id}
+                record={rec}
+                delay={idx * 40}
+                onStatusChange={(s) => handleStatusChange(rec.id, s)}
+                onNotesChange={(n) => handleNotesChange(rec.id, n)}
+                onDelete={() => handleDelete(rec.id)}
+              />
+            ))
+          )}
+        </div>
+      )}
 
       {/* Footer */}
       <div className="shrink-0 px-4 py-2.5 border-t border-gray-100">
@@ -195,7 +235,146 @@ export default function HistoryPanel() {
   );
 }
 
-// ─── Application Card ─────────────────────────────────────────────────────────
+// ─── Kanban View ──────────────────────────────────────────────────────────────
+
+const NEXT_STATUS: Partial<Record<Status, Status>> = {
+  applied: "interviewing",
+  interviewing: "offer",
+};
+
+function KanbanView({
+  history, onStatusChange, onDelete,
+}: {
+  history: ApplicationRecord[];
+  onStatusChange: (id: string, s: Status) => void;
+  onDelete: (id: string) => void;
+  onNotesChange: (id: string, n: string) => void;
+}) {
+  return (
+    <div className="flex gap-2 px-3 pb-2 pt-1 overflow-x-auto h-full" style={{ scrollbarWidth: "none" }}>
+      {ALL_STATUSES.map((status) => {
+        const cards = history.filter((r) => r.status === status);
+        const meta = STATUS_META[status];
+        return (
+          <div key={status} className="shrink-0 flex flex-col" style={{ width: 140 }}>
+            {/* Column header */}
+            <div
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl mb-1.5"
+              style={{ background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.1)" }}
+            >
+              <span className={`w-2 h-2 rounded-full shrink-0 ${meta.dot}`} />
+              <span className="text-[10px] font-bold text-gray-600 truncate">{meta.label.replace(" 🎉", "")}</span>
+              <span
+                className="ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                style={{ background: "rgba(99,102,241,0.1)", color: "#6366f1" }}
+              >
+                {cards.length}
+              </span>
+            </div>
+            {/* Cards */}
+            <div className="flex-1 overflow-y-auto space-y-1.5" style={{ scrollbarWidth: "none" }}>
+              {cards.length === 0 ? (
+                <div
+                  className="text-[10px] text-gray-300 text-center py-4"
+                  style={{ border: "1.5px dashed rgba(99,102,241,0.12)", borderRadius: 12 }}
+                >
+                  None
+                </div>
+              ) : (
+                cards.map((rec) => (
+                  <KanbanCard
+                    key={rec.id}
+                    record={rec}
+                    onStatusChange={(s) => onStatusChange(rec.id, s)}
+                    onDelete={() => onDelete(rec.id)}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function KanbanCard({
+  record, onStatusChange, onDelete,
+}: {
+  record: ApplicationRecord;
+  onStatusChange: (s: Status) => void;
+  onDelete: () => void;
+}) {
+  const [faviconFailed, setFaviconFailed] = useState(false);
+  const faviconUrl = record.domain
+    ? `https://www.google.com/s2/favicons?domain=${record.domain}&sz=32`
+    : null;
+  const companyInitial = (record.company || "?")[0].toUpperCase();
+  const next = NEXT_STATUS[record.status];
+
+  return (
+    <div
+      className="bg-white border border-gray-100 rounded-xl p-2 transition-shadow hover:shadow-sm"
+      style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}
+    >
+      {/* Favicon + company */}
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <div className="shrink-0 w-5 h-5 rounded-lg overflow-hidden flex items-center justify-center">
+          {faviconUrl && !faviconFailed ? (
+            <img src={faviconUrl} alt="" className="w-5 h-5 object-contain" onError={() => setFaviconFailed(true)} />
+          ) : (
+            <div
+              className="w-5 h-5 rounded-lg flex items-center justify-center text-white text-[9px] font-black"
+              style={{ background: "linear-gradient(135deg,#6366f1,#a855f7)" }}
+            >
+              {companyInitial}
+            </div>
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[11px] font-bold text-gray-800 truncate">{record.company}</div>
+        </div>
+      </div>
+
+      <div className="text-[9px] text-gray-400 truncate mb-2 pl-0.5">{record.role}</div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-1">
+        {next && (
+          <button
+            onClick={() => onStatusChange(next)}
+            className="flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full transition-all active:scale-95"
+            style={{
+              background: "rgba(99,102,241,0.1)",
+              color: "#6366f1",
+              border: "1px solid rgba(99,102,241,0.15)",
+            }}
+            title={`Move to ${STATUS_META[next].label}`}
+          >
+            <ArrowRight size={8} />
+            {STATUS_META[next].label.split(" ")[0]}
+          </button>
+        )}
+        <a
+          href={record.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="ml-auto p-1 text-gray-200 hover:text-brand-400 rounded-lg hover:bg-brand-50 transition-colors"
+        >
+          <ExternalLink size={9} />
+        </a>
+        <button
+          onClick={onDelete}
+          className="p-1 text-gray-200 hover:text-red-400 rounded-lg hover:bg-red-50 transition-colors"
+        >
+          <Trash2 size={9} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Application Card (list view) ─────────────────────────────────────────────
 
 function ApplicationCard({
   record, delay, onStatusChange, onNotesChange, onDelete,
@@ -214,7 +393,6 @@ function ApplicationCard({
   const menuRef = useRef<HTMLDivElement>(null);
   const meta = STATUS_META[record.status];
 
-  // Close status menu on outside click
   useEffect(() => {
     function handler(e: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
@@ -237,14 +415,12 @@ function ApplicationCard({
       style={{ animationDelay: `${delay}ms`, boxShadow: "0 1px 6px rgba(0,0,0,0.05)" }}
     >
       <div className="px-3.5 py-3">
-        {/* Top row */}
         <div className="flex items-start gap-2.5">
           {/* Favicon */}
           <div className="shrink-0 w-8 h-8 rounded-xl overflow-hidden mt-0.5 flex items-center justify-center">
             {faviconUrl && !faviconFailed ? (
               <img
-                src={faviconUrl}
-                alt=""
+                src={faviconUrl} alt=""
                 className="w-8 h-8 object-contain rounded-xl"
                 onError={() => setFaviconFailed(true)}
               />
@@ -311,7 +487,6 @@ function ApplicationCard({
 
         {/* Status + notes row */}
         <div className="flex items-center gap-2 mt-2.5">
-          {/* Status badge / dropdown */}
           <div className="relative" ref={menuRef}>
             <button
               onClick={() => setShowStatusMenu((v) => !v)}
@@ -344,7 +519,6 @@ function ApplicationCard({
             )}
           </div>
 
-          {/* Notes toggle */}
           <button
             onClick={() => setShowNotes((v) => !v)}
             className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-full border transition-colors ${
@@ -358,7 +532,6 @@ function ApplicationCard({
           </button>
         </div>
 
-        {/* Notes textarea */}
         {showNotes && (
           <textarea
             className="mt-2 w-full text-[12px] text-gray-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-amber-300/40"

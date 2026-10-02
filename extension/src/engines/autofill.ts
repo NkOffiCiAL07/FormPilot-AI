@@ -1,58 +1,76 @@
 import { FieldResult, NormalizedField } from "../shared/types";
 
-// ─── Native event trigger (React / Vue / Angular compatible) ─────────────────
+// ─── Native value setter (React / Vue / Angular compatible) ──────────────────
 
 function nativeSet(el: HTMLElement, value: string) {
-  const inputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-  const textareaSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
   const tag = el.tagName.toLowerCase();
-  if (tag === "input" && inputSetter) {
-    inputSetter.call(el, value);
-  } else if (tag === "textarea" && textareaSetter) {
-    textareaSetter.call(el, value);
-  } else {
-    (el as HTMLInputElement).value = value;
+  if (tag === "input") {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    if (setter) { setter.call(el, value); return; }
   }
+  if (tag === "textarea") {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    if (setter) { setter.call(el, value); return; }
+  }
+  (el as HTMLInputElement).value = value;
 }
 
-function triggerEvents(el: HTMLElement) {
-  ["input", "change", "blur"].forEach((evt) =>
-    el.dispatchEvent(new Event(evt, { bubbles: true, cancelable: true }))
-  );
-  // Also fire React synthetic event via KeyboardEvent trick
-  el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
-  el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+// Dispatch the full event sequence React/Angular/Vue listen to
+function triggerEvents(el: HTMLElement, value = "") {
+  el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  el.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+  // InputEvent (not generic Event) — React 17+ uses InputEvent internally
+  el.dispatchEvent(new InputEvent("input", {
+    bubbles: true,
+    cancelable: true,
+    data: value || null,
+    inputType: "insertText",
+  }));
+  el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+  el.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
 }
 
 function fillTextField(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
   el.focus();
+  el.click();
+  // Clear first so React re-fires
+  nativeSet(el, "");
+  el.dispatchEvent(new InputEvent("input", { bubbles: true, cancelable: true, inputType: "deleteContentBackward" }));
+  // Set actual value
   nativeSet(el, value);
-  triggerEvents(el);
+  triggerEvents(el, value);
 }
 
 function fillSelect(el: HTMLSelectElement, value: string) {
-  const lower = value.toLowerCase();
+  const lower = value.toLowerCase().trim();
   let matched = false;
 
-  // 1. exact value match
+  // 1. exact value
   for (const opt of Array.from(el.options)) {
     if (opt.value === value) { el.value = opt.value; matched = true; break; }
   }
-  // 2. exact label match
+  // 2. exact label
   if (!matched) {
     for (const opt of Array.from(el.options)) {
-      if (opt.text.toLowerCase() === lower) { el.value = opt.value; matched = true; break; }
+      if (opt.text.trim().toLowerCase() === lower) { el.value = opt.value; matched = true; break; }
     }
   }
-  // 3. partial match
+  // 3. starts-with label match
   if (!matched) {
     for (const opt of Array.from(el.options)) {
-      if (opt.text.toLowerCase().includes(lower) || lower.includes(opt.text.toLowerCase())) {
-        el.value = opt.value; matched = true; break;
-      }
+      const t = opt.text.trim().toLowerCase();
+      if (t.startsWith(lower) || lower.startsWith(t)) { el.value = opt.value; matched = true; break; }
     }
   }
-  if (matched) triggerEvents(el);
+  // 4. partial containment
+  if (!matched) {
+    for (const opt of Array.from(el.options)) {
+      const t = opt.text.trim().toLowerCase();
+      if (t.includes(lower) || lower.includes(t)) { el.value = opt.value; matched = true; break; }
+    }
+  }
+  if (matched) triggerEvents(el, value);
   return matched;
 }
 
@@ -80,14 +98,15 @@ function fillCheckbox(el: HTMLInputElement, value: string) {
   return true;
 }
 
-function flashHighlight(el: HTMLElement, color: string) {
+function flashHighlight(el: HTMLElement) {
   const prev = el.style.outline;
-  el.style.outline = `2px solid ${color}`;
+  const prevOffset = el.style.outlineOffset;
+  el.style.outline = "2px solid #4f6ef7";
   el.style.outlineOffset = "2px";
-  setTimeout(() => { el.style.outline = prev; el.style.outlineOffset = ""; }, 2500);
+  setTimeout(() => { el.style.outline = prev; el.style.outlineOffset = prevOffset; }, 2500);
 }
 
-// ─── Core fill by element reference ──────────────────────────────────────────
+// ─── Core fill logic ──────────────────────────────────────────────────────────
 
 function fillElement(el: HTMLElement, value: string): boolean {
   const tag = el.tagName.toLowerCase();
@@ -107,44 +126,83 @@ function fillElement(el: HTMLElement, value: string): boolean {
       ok = true;
     } else if (el.getAttribute("contenteditable") === "true" || el.getAttribute("role") === "textbox") {
       el.focus();
+      el.click();
       el.innerText = value;
-      triggerEvents(el);
+      triggerEvents(el, value);
       ok = true;
     }
-    if (ok) flashHighlight(el, "#4f6ef7");
+    if (ok) flashHighlight(el);
     return ok;
   } catch {
     return false;
   }
 }
 
-// ─── Find element — by fp-id first, then fallback by name/label ──────────────
+// ─── Element finder — 6 strategies, most robust to least ─────────────────────
+
+function normalizeLabel(s: string): string {
+  return s.toLowerCase().replace(/[*\s()\[\]]+/g, " ").trim();
+}
 
 function findElement(result: FieldResult): HTMLElement | null {
   const f = result.normalizedField;
 
-  // 1. Primary: by data-fp-id (set during scan)
+  // Strategy 1 — data-fp-id (set during scan, may be gone after React re-render)
   if (f.id) {
     const el = document.querySelector<HTMLElement>(`[data-fp-id="${f.id}"]`);
     if (el) return el;
   }
 
-  // 2. Fallback: by element id
+  // Strategy 2 — DOM element id
   if (f.elementId && f.elementId !== f.id) {
     const el = document.getElementById(f.elementId);
     if (el) return el;
   }
 
-  // 3. Fallback: by name attribute
+  // Strategy 3 — name attribute
   if (f.name) {
     const el = document.querySelector<HTMLElement>(`[name="${CSS.escape(f.name)}"]`);
     if (el) return el;
   }
 
-  // 4. Fallback: by aria-label
+  // Strategy 4 — aria-label
   if (f.ariaLabel) {
     const el = document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(f.ariaLabel)}"]`);
     if (el) return el;
+  }
+
+  // Strategy 5 — placeholder text
+  if (f.placeholder) {
+    const el = document.querySelector<HTMLElement>(`[placeholder="${CSS.escape(f.placeholder)}"]`);
+    if (el) return el;
+  }
+
+  // Strategy 6 — label text → input association (handles React re-renders best)
+  if (f.label) {
+    const target = normalizeLabel(f.label);
+    const allLabels = Array.from(document.querySelectorAll<HTMLLabelElement>("label"));
+    for (const lbl of allLabels) {
+      const lblNorm = normalizeLabel(lbl.innerText);
+      if (lblNorm === target || lblNorm.startsWith(target) || target.startsWith(lblNorm)) {
+        // Try for="id" linkage
+        const forId = lbl.getAttribute("for");
+        if (forId) {
+          const el = document.getElementById(forId);
+          if (el) return el;
+        }
+        // Try child input/select/textarea
+        const child = lbl.querySelector<HTMLElement>("input:not([type=hidden]), select, textarea");
+        if (child) return child;
+        // Try next sibling inputs
+        let sib = lbl.nextElementSibling as HTMLElement | null;
+        while (sib) {
+          if (sib.matches("input:not([type=hidden]), select, textarea")) return sib;
+          const inner = sib.querySelector<HTMLElement>("input:not([type=hidden]), select, textarea");
+          if (inner) return inner;
+          sib = sib.nextElementSibling as HTMLElement | null;
+        }
+      }
+    }
   }
 
   return null;
@@ -162,17 +220,18 @@ export function fillAllFields(results: FieldResult[]): { success: number; failed
   let success = 0, failed = 0, skipped = 0;
 
   for (const result of results) {
-    // Only fill auto and ai-resolved fields with actual values
-    if (result.status === "skipped" || result.status === "needs_input" ||
-        result.status === "sensitive" || result.status === "document") {
-      skipped++;
-      continue;
-    }
+    if (
+      result.status === "skipped" ||
+      result.status === "needs_input" ||
+      result.status === "sensitive" ||
+      result.status === "document"
+    ) { skipped++; continue; }
+
     if (!result.value) { skipped++; continue; }
 
     const el = findElement(result);
     if (!el) {
-      console.debug(`[FormPilot] Element not found for field "${result.normalizedField.label}" (id=${result.fieldId})`);
+      console.debug(`[FormPilot] Not found: "${result.normalizedField.label}" (id=${result.fieldId})`);
       failed++;
       continue;
     }
@@ -183,11 +242,11 @@ export function fillAllFields(results: FieldResult[]): { success: number; failed
       console.debug(`[FormPilot] Filled "${result.normalizedField.label}" → "${result.value.slice(0, 40)}"`);
     } else {
       failed++;
-      console.debug(`[FormPilot] Failed to fill "${result.normalizedField.label}"`);
+      console.debug(`[FormPilot] Fill failed: "${result.normalizedField.label}"`);
     }
   }
 
-  console.debug(`[FormPilot] Fill complete: ${success} filled, ${failed} failed, ${skipped} skipped`);
+  console.debug(`[FormPilot] Fill: ${success} filled, ${failed} failed, ${skipped} skipped`);
   return { success, failed, skipped };
 }
 

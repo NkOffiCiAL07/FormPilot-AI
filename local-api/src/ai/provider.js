@@ -65,6 +65,53 @@ Valid top-level keys: personal, employment, education, professional, open_ended,
     }
   }
 
+  // Answers all questions in a single LLM call — returns string[] in same order
+  async generateAnswerBatch(questions, context) {
+    const { profile, jobDescription, previousAnswers } = context;
+
+    // Compact profile — fewer tokens = faster response
+    const profileSummary = [
+      [profile.firstName, profile.lastName].filter(Boolean).join(" "),
+      profile.currentTitle ? `${profile.currentTitle} at ${profile.currentCompany}` : "",
+      profile.totalExperience ? `Exp: ${profile.totalExperience}` : "",
+      profile.skills?.length ? `Skills: ${profile.skills.slice(0, 6).join(", ")}` : "",
+      profile.summary ? profile.summary.slice(0, 200) : "",
+    ].filter(Boolean).join(" | ");
+
+    const questionsBlock = questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
+
+    const systemPrompt = `Job application assistant. Answer questions honestly using only the profile given. Under 100 words each. First person. Return ONLY a JSON string array, no extra text.`;
+
+    const userPrompt = `Profile: ${profileSummary}
+${jobDescription ? `Job: ${jobDescription.slice(0, 300)}` : ""}
+${previousAnswers?.length ? `Context: ${previousAnswers.slice(0, 2).join(" | ")}` : ""}
+
+Questions:
+${questionsBlock}
+
+Return JSON array of ${questions.length} answer(s): ["answer1"${questions.length > 1 ? ',"answer2"' : ""}${questions.length > 2 ? ",..." : ""}]`;
+
+    const content = await this.chat([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ], { temperature: 0.3 });
+
+    try {
+      const match = content.match(/\[[\s\S]*\]/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (Array.isArray(parsed)) return questions.map((_, i) => parsed[i] || "");
+      }
+    } catch {}
+    try {
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) return questions.map((_, i) => parsed[i] || "");
+    } catch {}
+
+    // Unparseable — throw so caller falls back to parallel individual calls
+    throw new Error("Batch response was not a valid JSON array");
+  }
+
   async generateAnswer(question, context) {
     const { profile, jobDescription, previousAnswers } = context;
 
@@ -124,6 +171,41 @@ Write a complete, ready-to-use cover letter with proper greeting and sign-off.`;
     ]);
   }
 
+  async generateInterviewPrep({ profile, company, role, jobDescription }) {
+    const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ") || "Candidate";
+    const profileSummary = [
+      `Name: ${fullName}`,
+      profile.currentTitle ? `Role: ${profile.currentTitle} at ${profile.currentCompany}` : "",
+      profile.totalExperience ? `Experience: ${profile.totalExperience}` : "",
+      profile.skills?.length ? `Skills: ${profile.skills.slice(0, 8).join(", ")}` : "",
+      profile.summary ? `About: ${profile.summary.slice(0, 250)}` : "",
+    ].filter(Boolean).join("\n");
+
+    const systemPrompt = `You are an expert interview coach. Generate realistic interview questions a hiring manager would ask for this role and provide concise, strong candidate answers based on the profile. Always respond with valid JSON only — no markdown, no extra text.`;
+
+    const userPrompt = `Generate exactly 6 interview questions and model answers for:
+Role: ${role || "this position"} at ${company || "this company"}
+${jobDescription ? `\nJob context: ${jobDescription.slice(0, 500)}` : ""}
+
+Candidate profile:
+${profileSummary}
+
+Return ONLY a JSON array:
+[{"q": "Tell me about yourself.", "a": "..."}, ...]`;
+
+    const content = await this.chat([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ], { temperature: 0.5 });
+
+    try {
+      const match = content.match(/\[[\s\S]*\]/);
+      if (match) return JSON.parse(match[0]);
+    } catch {}
+    try { return JSON.parse(content); } catch {}
+    return [];
+  }
+
   async scoreResume(jobDescription, resumes) {
     const scores = [];
     for (const resume of resumes) {
@@ -151,50 +233,44 @@ Resume tags: ${resume.tags?.join(", ")}`;
   }
 }
 
-export class OpenAIProvider extends AIProvider {
-  constructor(apiKey, model = "gpt-4o-mini") {
-    super();
-    this.apiKey = apiKey;
-    this.model = model;
-  }
+// Deterministic provider for tests and offline development
+export class MockProvider extends AIProvider {
+  constructor(responses = {}) { super(); this.responses = responses; this.model = "mock"; }
+  async isAvailable() { return true; }
+  async generateAnswerBatch(questions) { return questions.map((q) => this.responses[q] ?? `Mock answer to: ${q}`); }
+  async generateAnswer(q) { return this.responses[q] ?? `Mock answer to: ${q}`; }
+  async generateCoverLetter() { return this.responses.coverLetter ?? "Mock cover letter"; }
+  async generateInterviewPrep() { return this.responses.interviewPrep ?? []; }
+  async scoreResume(_jd, resumes) { return resumes.map((r) => ({ ...r, score: 0.5, reasoning: "mock" })); }
+}
 
-  async isAvailable() {
-    return !!this.apiKey;
-  }
+// Factory — cached for 2 minutes to avoid pinging Ollama on every request
+let _cachedProvider = null;
+let _cachedProviderAt = 0;
+let _cachedKey = "";
+const PROVIDER_TTL = 2 * 60 * 1000;
 
-  async chat(messages) {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({ model: this.model, messages, temperature: 0.3 }),
-    });
-    if (!res.ok) throw new Error(`OpenAI error: ${res.status}`);
-    const data = await res.json();
-    return data.choices[0]?.message?.content || "";
-  }
-
-  async generateAnswer(question, context) {
-    return new OllamaProvider().generateAnswer.call(
-      { chat: this.chat.bind(this) },
-      question,
-      context
-    );
+// Only loopback Ollama endpoints are allowed — profile data must never leave this machine.
+export function isLocalUrl(url) {
+  try {
+    const { hostname, protocol } = new URL(url);
+    return protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(hostname);
+  } catch {
+    return false;
   }
 }
 
-// Factory — returns the first available provider
 export async function getProvider(config = {}) {
-  if (config.openaiKey) {
-    const p = new OpenAIProvider(config.openaiKey);
-    if (await p.isAvailable()) return p;
+  if (process.env.FORMPILOT_MOCK_AI === "1") return new MockProvider();
+  const url = config.ollamaUrl && isLocalUrl(config.ollamaUrl) ? config.ollamaUrl : "http://localhost:11434";
+  const model = config.ollamaModel || "llama3.2";
+  const key = `${url}|${model}`;
+  if (_cachedProvider && _cachedKey === key && Date.now() - _cachedProviderAt < PROVIDER_TTL) {
+    return _cachedProvider;
   }
-  const ollama = new OllamaProvider(
-    config.ollamaUrl || "http://localhost:11434",
-    config.ollamaModel || "llama3.2"
-  );
-  if (await ollama.isAvailable()) return ollama;
-  return null;
+  const ollama = new OllamaProvider(url, model);
+  _cachedProvider = (await ollama.isAvailable()) ? ollama : null;
+  _cachedKey = key;
+  _cachedProviderAt = Date.now();
+  return _cachedProvider;
 }

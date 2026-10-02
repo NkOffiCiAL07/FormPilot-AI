@@ -71,11 +71,11 @@ export default function App() {
   ];
 
   return (
-    <div className="flex flex-col" style={{ height: "100vh", minHeight: 520, background: "#eef2ff" }}>
+    <div className="flex flex-col" style={{ height: "100vh", minHeight: 460, background: "#eef2ff" }}>
 
       {/* ── Gradient drop-wave header ──────────────────────────────── */}
       <div
-        className="drop-wave shrink-0 flex items-center gap-3 px-4 pt-4 pb-4 z-10"
+        className="drop-wave shrink-0 flex items-center gap-3 px-4 pt-3 pb-3 z-10"
         style={{ background: "linear-gradient(135deg,#6366f1 0%,#8b5cf6 55%,#a855f7 100%)" }}
       >
         {/* Liquid logo blob */}
@@ -182,31 +182,31 @@ export default function App() {
       </div>
 
       {/* ── Floating liquid dock nav ──────────────────────────────── */}
-      <div className="shrink-0 px-3 pb-3 pt-1">
+      <div className="shrink-0 px-2 pb-2 pt-1">
         <div
-          className="flex items-center justify-around px-2 py-2"
+          className="flex items-center justify-around px-1 py-1.5"
           style={{
             background: "linear-gradient(135deg,#6366f1 0%,#8b5cf6 55%,#a855f7 100%)",
-            borderRadius: "30px 26px 30px 26px",
-            boxShadow: "0 10px 36px rgba(99,102,241,0.5), 0 2px 8px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.2)",
+            borderRadius: "26px 22px 26px 22px",
+            boxShadow: "0 8px 28px rgba(99,102,241,0.45), 0 2px 6px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.2)",
           }}
         >
         {navItems.map(({ id, icon, label }) => (
           <button
             key={id}
             onClick={() => switchTab(id)}
-            className={`nav-pill relative flex flex-col items-center gap-0.5 px-4 py-1.5 transition-all ${
+            className={`nav-pill relative flex flex-col items-center gap-0.5 px-2 py-1 transition-all ${
               activeTab === id ? "active text-brand-600" : "text-white/55 hover:text-white/85"
             }`}
           >
             <span className={`transition-transform duration-200 ${activeTab === id ? "scale-115" : ""}`}>
               {icon}
             </span>
-            <span className="text-[9px] font-bold tracking-wide">{label}</span>
+            <span className="text-[8px] font-bold tracking-wide whitespace-nowrap">{label}</span>
 
             {id === "profile" && completeness < 80 && completeness > 0 && (
               <span
-                className="absolute top-0.5 right-1.5 w-2 h-2 rounded-full border-2 border-white/30 animate-badge-pop"
+                className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full border border-white/30"
                 style={{ background: "#fbbf24" }}
               />
             )}
