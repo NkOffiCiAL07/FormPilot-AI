@@ -1,11 +1,13 @@
 {
   "name": "formpilot-local-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test test/",
+    "lint": "node scripts/lint.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

@@ -1,170 +1,99 @@
 import { Router } from "express";
-import { getProvider } from "../ai/provider.js";
-import db from "../db/database.js";
-import { createHash } from "crypto";
+import { asyncHandler } from "../middleware/errors.js";
+import { requireObject, str } from "../middleware/validate.js";
+import { findSimilar } from "../services/answerMemory.js";
+import { generateAnswers, classifyFields } from "../ai/tasks.js";
+import { requireProvider } from "../ai/index.js";
+import { resumeRows } from "./documents.js";
 
 const router = Router();
+const BATCH = 4;
 
-function hashQuestion(question) {
-  return createHash("sha256").update(question.toLowerCase().trim()).digest("hex").slice(0, 16);
-}
+const questionOf = (f) => str(f.label || f.ariaLabel || f.placeholder || f.name, 300).trim();
 
-function findSimilarAnswers(question) {
-  const hash = hashQuestion(question);
-  return db.prepare("SELECT * FROM answer_memory WHERE question_hash = ? ORDER BY used_count DESC LIMIT 3").all(hash);
-}
+// POST /api/analyze — answers for open-ended questions.
+//   1. approved answers from memory (reused only when the context fits)  2. LLM for the rest.
+// Nothing here is auto-saved: answers become reusable only after the user approves them.
+router.post("/", asyncHandler(async (req, res) => {
+  const body = requireObject(req.body);
+  if (!Array.isArray(body.fields)) return res.status(400).json({ error: "fields array required", code: "BAD_REQUEST" });
+  const profile = body.profile && typeof body.profile === "object" ? body.profile : {};
+  const company = str(body.company, 120), role = str(body.role, 120);
+  const job = { company, role, jobDescription: str(body.jobDescription, 6000), pageText: str(body.pageText, 3000) };
+  const forceNew = body.forceNew === true;
 
-function saveAnswer(question, answer, context) {
-  const hash = hashQuestion(question);
-  const existing = db.prepare("SELECT id FROM answer_memory WHERE question_hash = ?").get(hash);
-  if (existing) {
-    db.prepare("UPDATE answer_memory SET used_count = used_count + 1, answer = ? WHERE question_hash = ?").run(answer, hash);
-  } else {
-    db.prepare(`INSERT INTO answer_memory (id, question_hash, question, answer, context, created_at)
-      VALUES (?, ?, ?, ?, ?, ?)`).run(
-      crypto.randomUUID(),
-      hash,
-      question,
-      answer,
-      JSON.stringify(context || {}),
-      new Date().toISOString()
-    );
-  }
-}
-
-// POST /api/analyze
-// Batches all AI-required fields into a single LLM call for speed.
-// Falls back to parallel individual calls if batch parsing fails.
-router.post("/", async (req, res) => {
-  const { fields, profile, jobDescription } = req.body;
-
-  if (!fields || !Array.isArray(fields)) {
-    return res.status(400).json({ error: "fields array required" });
-  }
-
-  const provider = await getProvider();
+  const resume = body.resumeId ? resumeRows().find((r) => r.id === body.resumeId) : resumeRows().find((r) => r.isDefault);
   const results = [];
-
-  // Annotate each field with its question text and cached similar answers
-  const annotated = fields.map((field) => {
-    const question = field.label || field.ariaLabel || field.placeholder || field.name;
-    if (!question) return { field, question: null, similar: [] };
-    const similar = findSimilarAnswers(question);
-    return { field, question, similar };
-  });
-
-  // Serve fields with no question immediately
-  const noQuestion = annotated.filter((a) => !a.question);
-  for (const { field } of noQuestion) {
-    results.push({ fieldId: field.id, status: "needs_input", value: "", source: "no_question" });
-  }
-
-  // Split remaining into: memory-cached (answer already known) vs needs-LLM
-  const withQuestion = annotated.filter((a) => !!a.question);
-  const fromMemory = [];
   const needsLLM = [];
 
-  for (const item of withQuestion) {
-    if (item.similar.length > 0) {
-      fromMemory.push(item);
+  for (const field of body.fields.slice(0, 40)) {
+    const question = questionOf(field);
+    if (!question) { results.push({ fieldId: field.id, status: "needs_input", value: "", source: "no_question", requiresReview: true, confidence: 0, reason: "No question text found" }); continue; }
+    const similar = findSimilar(question, { company, role });
+    const reusable = !forceNew && similar.find((s) => s.contextMatch && s.similarity >= 0.75);
+    if (reusable) {
+      results.push({
+        fieldId: field.id, status: "memory", value: reusable.answer, source: "answer_memory", confidence: Math.min(0.9, reusable.similarity),
+        requiresReview: true, reason: `Reused an answer you approved earlier ("${reusable.question.slice(0, 60)}")`,
+        reused: { id: reusable.id, question: reusable.question, similarity: reusable.similarity, company: reusable.company }, similar,
+      });
     } else {
-      needsLLM.push(item);
+      needsLLM.push({ field, question, similar });
     }
   }
 
-  // Return memory-cached answers immediately
-  for (const { field, similar } of fromMemory) {
-    results.push({
-      fieldId: field.id,
-      status: "ai",
-      value: similar[0].answer,
-      source: "memory_cache",
-      confidence: 0.85,
-      reasoning: `From answer memory (used ${similar[0].used_count} times)`,
-    });
-  }
-
-  // If no LLM-required fields, we're done
-  if (needsLLM.length === 0) {
-    return res.json({ results });
-  }
-
-  // No provider available
-  if (!provider) {
-    for (const { field, question } of needsLLM) {
-      results.push({
-        fieldId: field.id,
-        status: "needs_input",
-        value: "",
-        source: "ai_unavailable",
-        needsUserInput: true,
-        userPrompt: `AI unavailable. Please answer: "${question}"`,
-      });
+  let ai = { ok: true };
+  if (needsLLM.length) {
+    try {
+      const provider = requireProvider();
+      for (let i = 0; i < needsLLM.length; i += BATCH) {
+        const chunk = needsLLM.slice(i, i + BATCH);
+        const out = await generateAnswers(provider, {
+          questions: chunk.map((c) => c.question), profile, resumeText: resume?.text, job,
+          approved: chunk.flatMap((c) => c.similar.filter((s) => s.contextMatch).slice(0, 1)),
+        });
+        chunk.forEach((c, j) => {
+          const a = out[j];
+          const hasAnswer = !!a.answer;
+          results.push({
+            fieldId: c.field.id, status: hasAnswer ? "ai" : "needs_input", value: a.answer, source: "ai_generated",
+            confidence: hasAnswer ? (a.missing.length ? 0.55 : 0.75) : 0,
+            requiresReview: true, missing: a.missing, similar: c.similar,
+            sanitized: a.sanitized || undefined, injectionSuspected: a.injectionSuspected || undefined,
+            reason: hasAnswer
+              ? (a.missing.length ? "Drafted from your profile — some details were missing" : "Drafted from your profile and this job")
+              : "Your profile doesn't have enough information to answer this honestly",
+          });
+        });
+      }
+    } catch (err) {
+      ai = { ok: false, error: err.userMessage || "AI unavailable", code: err.code, debug: err.details };
+      for (const c of needsLLM) {
+        results.push({ fieldId: c.field.id, status: "needs_input", value: "", source: "ai_unavailable", confidence: 0, requiresReview: true,
+          similar: c.similar, reason: ai.error, needsUserInput: true });
+      }
     }
-    return res.json({ results });
   }
+  res.json({ results, ai });
+}));
 
-  // ── Batch all LLM-required fields into ONE call ──────────────────────────────
+// POST /api/analyze/classify — the LLM only sees fields the deterministic resolver couldn't place,
+// and may only answer with a key from the allowed list.
+router.post("/classify", asyncHandler(async (req, res) => {
+  const body = requireObject(req.body);
+  const fields = (Array.isArray(body.fields) ? body.fields : []).slice(0, 25);
+  const keys = (Array.isArray(body.keys) ? body.keys : []).filter((k) => typeof k === "string").slice(0, 80);
+  if (!fields.length || !keys.length) return res.json({ matches: [] });
   try {
-    const questions = needsLLM.map((a) => a.question);
-    const previousAnswers = needsLLM.flatMap((a) => a.similar.map((s) => s.answer));
-
-    const batchAnswers = await provider.generateAnswerBatch(questions, {
-      profile,
-      jobDescription,
-      previousAnswers,
+    const matches = await classifyFields(requireProvider(), {
+      fields: fields.map((f) => ({ id: str(f.id, 80), label: str(f.label, 200), name: str(f.name, 100), placeholder: str(f.placeholder, 150),
+        fieldType: str(f.fieldType, 20), sectionContext: str(f.sectionContext, 120) })),
+      keys,
     });
-
-    for (let i = 0; i < needsLLM.length; i++) {
-      const { field, question } = needsLLM[i];
-      const answer = (batchAnswers[i] || "").trim();
-      if (answer) saveAnswer(question, answer, { jobDescription: jobDescription?.slice(0, 200) });
-      results.push({
-        fieldId: field.id,
-        status: answer ? "ai" : "needs_input",
-        value: answer,
-        source: answer ? "ai_generated" : "ai_empty",
-        confidence: 0.75,
-        reasoning: `Batch AI — ${needsLLM.length} field(s) in one call`,
-        needsUserInput: !answer,
-        userPrompt: answer ? undefined : `Please answer: "${question}"`,
-      });
-    }
-  } catch (batchErr) {
-    // ── Fallback: parallel individual calls (still faster than serial) ──────
-    console.warn("[FormPilot] Batch failed, falling back to parallel:", batchErr?.message);
-    await Promise.all(
-      needsLLM.map(async ({ field, question, similar }) => {
-        try {
-          const answer = await provider.generateAnswer(question, {
-            profile,
-            jobDescription,
-            previousAnswers: similar.map((s) => s.answer),
-          });
-          saveAnswer(question, answer, { jobDescription: jobDescription?.slice(0, 200) });
-          results.push({
-            fieldId: field.id,
-            status: "ai",
-            value: answer,
-            source: "ai_generated",
-            confidence: 0.75,
-            reasoning: `AI (parallel fallback)`,
-          });
-        } catch {
-          results.push({
-            fieldId: field.id,
-            status: "needs_input",
-            value: "",
-            source: "ai_error",
-            needsUserInput: true,
-            userPrompt: `AI failed. Please answer: "${question}"`,
-          });
-        }
-      })
-    );
+    res.json({ matches });
+  } catch (err) {
+    res.json({ matches: [], ai: { ok: false, error: err.userMessage, code: err.code } });
   }
-
-  res.json({ results });
-});
+}));
 
 export default router;
