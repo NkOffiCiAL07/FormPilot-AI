@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "FormPilot AI",
-  "version": "0.1.0",
-  "description": "AI-powered universal form-filling assistant. Fill any form intelligently using your local profile.",
+  "version": "0.2.0",
+  "description": "Private, local AI assistant for job applications: fills forms from your profile, drafts answers with a local model, and tracks your applications.",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -22,8 +22,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/content/index.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content/index.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }
@@ -39,5 +43,21 @@
   "host_permissions": [
     "http://localhost:3710/*",
     "http://127.0.0.1:3710/*"
-  ]
+  ],
+  "commands": {
+    "open-side-panel": {
+      "suggested_key": {
+        "default": "Alt+Shift+F",
+        "mac": "Alt+Shift+F"
+      },
+      "description": "Open the FormPilot side panel"
+    },
+    "scan-form": {
+      "suggested_key": {
+        "default": "Alt+Shift+S",
+        "mac": "Alt+Shift+S"
+      },
+      "description": "Re-scan the current page for form fields"
+    }
+  }
 }

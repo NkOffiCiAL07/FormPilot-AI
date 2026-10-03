@@ -75,6 +75,13 @@ test("analyze: memory reuse, AI generation, missing-info flag, and no silent reu
   assert.equal(r.data.results[0].status, "needs_input");
   assert.deepEqual(r.data.results[0].missing, ["Kubernetes experience"]);
 
+  // details supplied by the user are passed to the model as trusted facts
+  const spy = new MockProvider(() => JSON.stringify({ answers: [{ answer: "I ran clusters.", missing: [] }] }));
+  setProviderOverride(spy);
+  await api.call("POST", "/api/analyze", { fields: [field("f3", "Describe your Kubernetes experience")], profile: {}, notes: { f3: "Ran 3 prod clusters for 2 years" } });
+  assert.match(spy.calls[0].user, /Ran 3 prod clusters for 2 years/);
+  assert.match(spy.calls[0].user, /DETAILS PROVIDED BY THE USER/);
+
   // generated answers are NOT remembered until the user approves them
   assert.equal((await api.call("GET", "/api/answers?q=kubernetes")).data.answers.length, 0);
 });

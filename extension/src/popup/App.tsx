@@ -1,219 +1,63 @@
 import React, { useEffect, useState } from "react";
-import { UserProfile, defaultProfile } from "../shared/types";
-import ProfileEditor from "./ProfileEditor";
+import { BrainCircuit, Briefcase, FileText, LayoutDashboard, Settings as SettingsIcon, User } from "lucide-react";
+import { api } from "../shared/api";
+import { hasLegacyData, migrateLegacyData } from "../shared/storage";
+import { profileCompleteness, useProfile, useSettings } from "../ui/hooks";
+import { Spinner } from "../ui/components";
 import Dashboard from "./Dashboard";
+import ProfileEditor from "./ProfileEditor";
 import DocumentsManager from "./DocumentsManager";
-import HistoryPanel from "./HistoryPanel";
+import ApplicationsPanel from "./ApplicationsPanel";
 import Settings from "./Settings";
-import {
-  BrainCircuit, LayoutDashboard, User, FileText, Clock, Settings as SettingsIcon,
-  Wifi, WifiOff, Loader2,
-} from "lucide-react";
+import Onboarding from "./Onboarding";
 
-type Tab = "dashboard" | "profile" | "documents" | "history" | "settings";
-
-function profileCompleteness(p: UserProfile): number {
-  const coreFields = [
-    p.firstName, p.lastName, p.email, p.phone,
-    p.address.city, p.address.country,
-    p.currentCompany, p.currentTitle, p.totalExperience,
-  ];
-  return Math.round(coreFields.filter(Boolean).length / coreFields.length * 100);
-}
+type Tab = "home" | "profile" | "documents" | "applications" | "settings";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>("dashboard");
-  const [profile, setProfile] = useState<UserProfile>(defaultProfile);
+  const [tab, setTab] = useState<Tab>("home");
+  const { profile, save, loaded } = useProfile();
+  const { settings, update, loaded: settingsLoaded } = useSettings();
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
-  const [profileLoaded, setProfileLoaded] = useState(false);
-  const [tabChanging, setTabChanging] = useState(false);
+  const [aiModel, setAiModel] = useState<string | null>(null);
 
   useEffect(() => {
-    chrome.runtime.sendMessage({ type: "GET_PROFILE" }, (res) => {
-      if (res?.profile) setProfile(res.profile);
-      setProfileLoaded(true);
-    });
-    chrome.runtime.sendMessage({ type: "API_STATUS" }, (res) => {
-      setApiOnline(res?.online ?? false);
-    });
-    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === "local" && changes["profile"])
-        setProfile(changes["profile"].newValue ?? defaultProfile);
-    };
-    chrome.storage.onChanged.addListener(listener);
-    return () => chrome.storage.onChanged.removeListener(listener);
+    api.health().then((h) => { setApiOnline(true); setAiModel(h.ai.online ? h.ai.model : null); }).catch(() => setApiOnline(false));
   }, []);
+  // bring data saved by older versions (or queued while the API was offline) into the local database
+  useEffect(() => { if (apiOnline) hasLegacyData().then(async (y) => { if (y) await migrateLegacyData(); }).catch(() => {}); }, [apiOnline]);
 
-  function saveProfile(updated: UserProfile) {
-    const p = { ...updated, updatedAt: new Date().toISOString() };
-    setProfile(p);
-    chrome.storage.local.set({ profile: p });
-    chrome.runtime.sendMessage({ type: "SAVE_PROFILE", payload: p }).catch(() => {});
+  if (!loaded || !settingsLoaded) return <div style={{ display: "grid", placeItems: "center", height: "100%" }}><Spinner size={22} /></div>;
+
+  // First run: onboarding (also shown if the profile is entirely empty and onboarding was never completed)
+  if (!settings.onboardingComplete && profileCompleteness(profile) === 0) {
+    return <Onboarding profile={profile} saveProfile={save} update={update} onDone={() => setTab("home")} />;
   }
 
-  function switchTab(tab: Tab) {
-    if (tab === activeTab) return;
-    setTabChanging(true);
-    setTimeout(() => { setActiveTab(tab); setTabChanging(false); }, 110);
-  }
-
-  const completeness = profileCompleteness(profile);
-  const isFirstRun = profileLoaded && completeness === 0;
-  const showNudge = profileLoaded && completeness < 40 && activeTab === "dashboard";
-  const showProgressBar = profileLoaded && completeness > 0 && completeness < 100 && activeTab === "profile";
-
-  const navItems: { id: Tab; icon: React.ReactNode; label: string }[] = [
-    { id: "dashboard", icon: <LayoutDashboard size={16} />, label: "Home"     },
-    { id: "profile",   icon: <User size={16} />,            label: "Profile"  },
-    { id: "documents", icon: <FileText size={16} />,        label: "Docs"     },
-    { id: "history",   icon: <Clock size={16} />,           label: "History"  },
-    { id: "settings",  icon: <SettingsIcon size={16} />,    label: "Settings" },
+  const nav: { id: Tab; icon: React.ReactNode; label: string }[] = [
+    { id: "home", icon: <LayoutDashboard size={17} />, label: "Home" }, { id: "profile", icon: <User size={17} />, label: "Profile" },
+    { id: "documents", icon: <FileText size={17} />, label: "Docs" }, { id: "applications", icon: <Briefcase size={17} />, label: "Applications" },
+    { id: "settings", icon: <SettingsIcon size={17} />, label: "Settings" },
   ];
 
   return (
-    <div className="flex flex-col" style={{ height: "100vh", minHeight: 460, background: "#eef2ff" }}>
-
-      {/* ── Gradient drop-wave header ──────────────────────────────── */}
-      <div
-        className="drop-wave shrink-0 flex items-center gap-3 px-4 pt-3 pb-3 z-10"
-        style={{ background: "linear-gradient(135deg,#6366f1 0%,#8b5cf6 55%,#a855f7 100%)" }}
-      >
-        {/* Liquid logo blob */}
-        <div
-          className="shrink-0 w-9 h-9 flex items-center justify-center animate-liquid"
-          style={{
-            background: "rgba(255,255,255,0.22)",
-            borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
-            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.4), 0 2px 8px rgba(0,0,0,0.15)",
-          }}
-        >
-          <BrainCircuit size={17} className="text-white" />
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <header className="fp-header">
+        <div className="fp-logo" aria-hidden="true"><BrainCircuit size={17} color="#fff" /></div>
+        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 800, fontSize: 15, lineHeight: 1.1 }}>FormPilot AI</div><div style={{ fontSize: 10.5, opacity: 0.75 }}>Private application assistant</div></div>
+        <div className="fp-status" role="status" title={apiOnline ? (aiModel ? `Local AI: ${aiModel}` : "Local server running; Ollama not detected") : "Local server isn't running"}>
+          <span className={`fp-dot ${apiOnline ? "on" : ""}`} aria-hidden="true" />{apiOnline === null ? "…" : apiOnline ? (aiModel ? "AI ready" : "No AI") : "Offline"}
         </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="font-bold text-white text-[15px] tracking-tight leading-none">FormPilot AI</div>
-          <div className="text-white/55 text-[10px] mt-0.5 truncate">
-            {activeTab === "dashboard" && "Smart form filler"}
-            {activeTab === "profile"   && "Your saved profile"}
-            {activeTab === "documents" && "Uploaded documents"}
-            {activeTab === "history"   && "Application history"}
-            {activeTab === "settings"  && "Preferences & backup"}
-          </div>
-        </div>
-
-        {/* API status capsule */}
-        <div
-          className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold"
-          style={{
-            background: apiOnline
-              ? "rgba(52,211,153,0.2)"
-              : "rgba(255,255,255,0.13)",
-            color: apiOnline ? "#a7f3d0" : "rgba(255,255,255,0.6)",
-            border: "1px solid rgba(255,255,255,0.15)",
-          }}
-        >
-          {apiOnline === null ? <Loader2 size={10} className="animate-spin" /> :
-           apiOnline         ? <Wifi size={10} /> : <WifiOff size={10} />}
-          <span>{apiOnline === null ? "…" : apiOnline ? "AI On" : "Offline"}</span>
-        </div>
-      </div>
-
-      {/* ── Sub-header banners (outside scroll so they sit above wave) ── */}
-      {showNudge && (
-        <div
-          className="mx-3 flex items-start gap-2.5 rounded-2xl px-3 py-2.5 cursor-pointer transition-all animate-fade-up water-card"
-          style={{ marginTop: 36, marginBottom: 4 }}
-          onClick={() => switchTab("profile")}
-        >
-          <div
-            className="shrink-0 w-5 h-5 rounded-full flex items-center justify-center mt-0.5"
-            style={{ background: "linear-gradient(135deg,#f59e0b,#d97706)" }}
-          >
-            <span className="text-white text-[9px] font-black">!</span>
-          </div>
-          <div className="text-[11px] text-gray-700 leading-relaxed">
-            {isFirstRun
-              ? <><strong className="text-gray-900">Welcome to FormPilot!</strong> Fill in your profile once — we'll auto-fill every form from then on.</>
-              : <><strong className="text-gray-900">Profile {completeness}% complete.</strong> Add more details to improve auto-fill accuracy.</>
-            }
-            <span className="ml-1 text-brand-600 font-semibold underline underline-offset-2">Set up →</span>
-          </div>
-        </div>
-      )}
-
-      {showProgressBar && (
-        <div
-          className="mx-3 rounded-2xl px-3 py-2.5 animate-fade-up water-card"
-          style={{ marginTop: 36, marginBottom: 4 }}
-        >
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] text-brand-700 font-semibold">Profile completeness</span>
-            <span className="text-[11px] font-black text-brand-600">{completeness}%</span>
-          </div>
-          <div className="h-2 rounded-full bg-brand-100 overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all duration-700"
-              style={{
-                width: `${completeness}%`,
-                background: "linear-gradient(90deg,#6366f1,#a855f7)",
-                boxShadow: "0 0 8px rgba(99,102,241,0.4)",
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* ── Main content ──────────────────────────────────────────── */}
-      <div
-        className="flex-1 overflow-y-auto"
-        style={{
-          /* Always pad top by wave height so first card isn't under the wave */
-          paddingTop: (showNudge || showProgressBar) ? 0 : 34,
-          opacity: tabChanging ? 0 : 1,
-          transform: tabChanging ? "translateY(5px)" : "translateY(0)",
-          transition: "opacity 0.11s ease, transform 0.11s ease",
-        }}
-      >
-        {activeTab === "dashboard" && <Dashboard apiOnline={apiOnline} profile={profile} onSetupProfile={() => switchTab("profile")} />}
-        {activeTab === "profile"   && <ProfileEditor profile={profile} onSave={saveProfile} />}
-        {activeTab === "documents" && <DocumentsManager />}
-        {activeTab === "history"   && <HistoryPanel />}
-        {activeTab === "settings"  && <Settings profile={profile} onImportProfile={(p) => { saveProfile(p); switchTab("profile"); }} />}
-      </div>
-
-      {/* ── Floating liquid dock nav ──────────────────────────────── */}
-      <div className="shrink-0 px-2 pb-2 pt-1">
-        <div
-          className="flex items-center justify-around px-1 py-1.5"
-          style={{
-            background: "linear-gradient(135deg,#6366f1 0%,#8b5cf6 55%,#a855f7 100%)",
-            borderRadius: "26px 22px 26px 22px",
-            boxShadow: "0 8px 28px rgba(99,102,241,0.45), 0 2px 6px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.2)",
-          }}
-        >
-        {navItems.map(({ id, icon, label }) => (
-          <button
-            key={id}
-            onClick={() => switchTab(id)}
-            className={`nav-pill relative flex flex-col items-center gap-0.5 px-2 py-1 transition-all ${
-              activeTab === id ? "active text-brand-600" : "text-white/55 hover:text-white/85"
-            }`}
-          >
-            <span className={`transition-transform duration-200 ${activeTab === id ? "scale-115" : ""}`}>
-              {icon}
-            </span>
-            <span className="text-[8px] font-bold tracking-wide whitespace-nowrap">{label}</span>
-
-            {id === "profile" && completeness < 80 && completeness > 0 && (
-              <span
-                className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full border border-white/30"
-                style={{ background: "#fbbf24" }}
-              />
-            )}
-          </button>
-        ))}
-        </div>
-      </div>
+      </header>
+      <main style={{ flex: 1, overflowY: "auto" }} className="fp-fade" key={tab}>
+        {tab === "home" && <Dashboard profile={profile} settings={settings} apiOnline={apiOnline} go={(n) => setTab(n)} />}
+        {tab === "profile" && <ProfileEditor profile={profile} onSave={save} />}
+        {tab === "documents" && <DocumentsManager />}
+        {tab === "applications" && <ApplicationsPanel />}
+        {tab === "settings" && <Settings settings={settings} update={update} profile={profile} saveProfile={save} />}
+      </main>
+      <nav className="fp-nav" aria-label="Main">
+        {nav.map((n) => <button key={n.id} aria-current={tab === n.id ? "page" : undefined} onClick={() => setTab(n.id)}>{n.icon}<span>{n.label}</span></button>)}
+      </nav>
     </div>
   );
 }

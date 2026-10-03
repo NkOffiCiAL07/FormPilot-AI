@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite dev",
-    "build": "vite build",
+    "dev": "vite build --watch",
+    "build": "vite build && vite build --config vite.content.config.ts",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

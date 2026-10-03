@@ -21,6 +21,7 @@ router.post("/", asyncHandler(async (req, res) => {
   const company = str(body.company, 120), role = str(body.role, 120);
   const job = { company, role, jobDescription: str(body.jobDescription, 6000), pageText: str(body.pageText, 3000) };
   const forceNew = body.forceNew === true;
+  const notesById = body.notes && typeof body.notes === "object" ? body.notes : {};
 
   const resume = body.resumeId ? resumeRows().find((r) => r.id === body.resumeId) : resumeRows().find((r) => r.isDefault);
   const results = [];
@@ -51,6 +52,7 @@ router.post("/", asyncHandler(async (req, res) => {
         const out = await generateAnswers(provider, {
           questions: chunk.map((c) => c.question), profile, resumeText: resume?.text, job,
           approved: chunk.flatMap((c) => c.similar.filter((s) => s.contextMatch).slice(0, 1)),
+          notes: chunk.map((c) => str(notesById[c.field.id], 800)),
         });
         chunk.forEach((c, j) => {
           const a = out[j];

@@ -1,479 +1,188 @@
 import React, { useEffect, useRef, useState } from "react";
-import { UserProfile, EmploymentEntry, EducationEntry, CustomField, defaultProfile } from "../shared/types";
-import { Plus, Trash2, Save, Download, Upload } from "lucide-react";
+import { Briefcase, Check, GraduationCap, Plus, SlidersHorizontal, Trash2, User, Wand2 } from "lucide-react";
+import { CustomField, EducationEntry, EmploymentEntry, UserProfile, YesNo } from "../shared/types";
+import { Button, Card, EmptyState, Tabs, TextInput, Field } from "../ui/components";
+import { profileCompleteness } from "../ui/hooks";
 
-interface Props {
-  profile: UserProfile;
-  onSave: (p: UserProfile) => void;
+type Section = "personal" | "work" | "prefs" | "education" | "custom";
+
+// Comma-separated list input. Keeps the raw text while typing so a trailing comma isn't eaten.
+function ListInput({ label, value, onChange, placeholder }: { label: string; value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
+  const [text, setText] = useState(value.join(", "));
+  const last = useRef(value.join(", "));
+  useEffect(() => {
+    if (value.join(", ") !== last.current) { last.current = value.join(", "); setText(value.join(", ")); }
+  }, [value]);
+  return (
+    <TextInput label={label} value={text} placeholder={placeholder} help="Separate with commas"
+      onChange={(t) => { setText(t); const list = t.split(",").map((s) => s.trim()).filter(Boolean); last.current = list.join(", "); onChange(list); }} />
+  );
 }
 
-type Section = "personal" | "professional" | "employment" | "education" | "custom";
+const YesNoSelect = ({ label, value, onChange, help }: { label: string; value: YesNo; onChange: (v: YesNo) => void; help?: string }) => (
+  <Field label={label} help={help}>
+    <select className="fp-select" value={value} onChange={(e) => onChange(e.target.value as YesNo)} aria-label={label}>
+      <option value="">Ask me each time</option><option value="yes">Yes</option><option value="no">No</option>
+    </select>
+  </Field>
+);
 
-export default function ProfileEditor({ profile, onSave }: Props) {
+const uid = () => crypto.randomUUID();
+
+export default function ProfileEditor({ profile, onSave }: { profile: UserProfile; onSave: (p: UserProfile) => void }) {
   const [data, setData] = useState<UserProfile>(profile);
-  const [activeSection, setActiveSection] = useState<Section>("personal");
+  const [section, setSection] = useState<Section>("personal");
   const [saved, setSaved] = useState(false);
-  const importRef = useRef<HTMLInputElement>(null);
+  const dirty = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+
+  // accept external updates (import, other window) only when there are no unsaved local edits
+  useEffect(() => { if (!dirty.current) setData(profile); }, [profile]);
 
   function update<K extends keyof UserProfile>(key: K, value: UserProfile[K]) {
-    setData((d) => ({ ...d, [key]: value }));
+    setData((d) => {
+      const next = { ...d, [key]: value };
+      dirty.current = true;
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => { onSave(next); dirty.current = false; setSaved(true); setTimeout(() => setSaved(false), 1600); }, 600);
+      return next;
+    });
   }
+  const setAddr = (k: keyof UserProfile["address"], v: string) => update("address", { ...data.address, [k]: v });
+  useEffect(() => () => clearTimeout(timer.current), []);
 
-  function updateAddress(key: keyof UserProfile["address"], value: string) {
-    setData((d) => ({ ...d, address: { ...d.address, [key]: value } }));
-  }
-
-  function handleSave() {
-    onSave(data);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  }
-
-  function handleExport() {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `formpilot-profile-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-  }
-
-  function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const parsed = JSON.parse(ev.target?.result as string);
-        const merged: UserProfile = { ...defaultProfile, ...parsed, updatedAt: new Date().toISOString() };
-        setData(merged);
-        onSave(merged);
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
-      } catch { /* ignore */ } finally {
-        if (importRef.current) importRef.current.value = "";
-      }
-    };
-    reader.readAsText(file);
-  }
-
-  const sections: { id: Section; label: string }[] = [
-    { id: "personal", label: "Personal" },
-    { id: "professional", label: "Professional" },
-    { id: "employment", label: "Employment" },
-    { id: "education", label: "Education" },
-    { id: "custom", label: "Custom" },
-  ];
+  const pct = profileCompleteness(data);
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Section pill tabs */}
-      <div className="flex overflow-x-auto px-3 gap-1.5 py-2" style={{ scrollbarWidth: "none" }}>
-        {sections.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => setActiveSection(s.id)}
-            className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap border transition-all ${
-              activeSection === s.id
-                ? "text-white border-transparent"
-                : "text-gray-500 border-gray-200 bg-white hover:border-brand-300 hover:text-brand-600"
-            }`}
-            style={activeSection === s.id ? { background: "linear-gradient(135deg,#6366f1,#8b5cf6)" } : {}}
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-3">
-        {activeSection === "personal" && (
-          <PersonalSection data={data} update={update} updateAddress={updateAddress} />
-        )}
-        {activeSection === "professional" && (
-          <ProfessionalSection data={data} update={update} />
-        )}
-        {activeSection === "employment" && (
-          <EmploymentSection entries={data.employment} onChange={(e) => update("employment", e)} />
-        )}
-        {activeSection === "education" && (
-          <EducationSection entries={data.education} onChange={(e) => update("education", e)} />
-        )}
-        {activeSection === "custom" && (
-          <CustomSection fields={data.customFields} onChange={(f) => update("customFields", f)} />
-        )}
-      </div>
-
-      <div className="shrink-0 px-4 py-3 border-t border-gray-100 space-y-2">
-        <button
-          onClick={handleSave}
-          className="w-full flex items-center justify-center gap-2 text-white text-[13px] font-bold py-3 rounded-2xl transition-all active:scale-95"
-          style={saved
-            ? { background: "linear-gradient(135deg, #10b981, #059669)", boxShadow: "0 4px 18px rgba(16,185,129,0.4)" }
-            : { background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 4px 18px rgba(99,102,241,0.4)" }
-          }
-        >
-          <Save size={15} />
-          {saved ? "Profile Saved!" : "Save Profile"}
-        </button>
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={handleExport}
-            className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold border transition-all active:scale-95"
-            style={{ borderColor: "rgba(99,102,241,0.25)", color: "#6366f1", background: "rgba(99,102,241,0.06)" }}
-          >
-            <Download size={12} /> Export JSON
-          </button>
-          <button
-            onClick={() => importRef.current?.click()}
-            className="flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-semibold border transition-all active:scale-95"
-            style={{ borderColor: "rgba(99,102,241,0.25)", color: "#6366f1", background: "rgba(99,102,241,0.06)" }}
-          >
-            <Upload size={12} /> Import JSON
-          </button>
-          <input ref={importRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
+    <div className="fp-screen">
+      <div className="fp-row">
+        <div className="fp-col" style={{ flex: 1, gap: 4 }}>
+          <div className="fp-row"><h1 className="fp-h1">Your profile</h1>{saved && <span className="fp-badge ok" role="status"><Check size={11} /> Saved</span>}</div>
+          <div className="fp-bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Profile completeness"><i style={{ width: `${pct}%` }} /></div>
+          <div className="fp-help">{pct}% complete · stored only on this computer</div>
         </div>
       </div>
+
+      <Tabs<Section> label="Profile sections" value={section} onChange={setSection} tabs={[
+        { id: "personal", label: "Personal", icon: <User size={13} /> }, { id: "work", label: "Work", icon: <Briefcase size={13} /> },
+        { id: "prefs", label: "Prefs", icon: <SlidersHorizontal size={13} /> }, { id: "education", label: "Study", icon: <GraduationCap size={13} /> },
+        { id: "custom", label: "Custom", icon: <Wand2 size={13} /> },
+      ]} />
+
+      {section === "personal" && (
+        <Card><div className="fp-col" style={{ gap: 10 }}>
+          <div className="fp-row"><div style={{ flex: 1 }}><TextInput label="First name" value={data.firstName} onChange={(v) => update("firstName", v)} autoComplete="given-name" /></div>
+            <div style={{ flex: 1 }}><TextInput label="Last name" value={data.lastName} onChange={(v) => update("lastName", v)} autoComplete="family-name" /></div></div>
+          <TextInput label="Middle name" value={data.middleName} onChange={(v) => update("middleName", v)} />
+          <TextInput label="Email" type="email" value={data.email} onChange={(v) => update("email", v)} autoComplete="email" />
+          <TextInput label="Phone" type="tel" value={data.phone} onChange={(v) => update("phone", v)} autoComplete="tel" />
+          <TextInput label="Date of birth" type="date" value={data.dateOfBirth} onChange={(v) => update("dateOfBirth", v)} />
+          <TextInput label="Street address" value={data.address.street} onChange={(v) => setAddr("street", v)} />
+          <div className="fp-row"><div style={{ flex: 1 }}><TextInput label="City" value={data.address.city} onChange={(v) => setAddr("city", v)} /></div>
+            <div style={{ flex: 1 }}><TextInput label="State / province" value={data.address.state} onChange={(v) => setAddr("state", v)} /></div></div>
+          <div className="fp-row"><div style={{ flex: 1 }}><TextInput label="Country" value={data.address.country} onChange={(v) => setAddr("country", v)} /></div>
+            <div style={{ flex: 1 }}><TextInput label="ZIP / PIN" value={data.address.zip} onChange={(v) => setAddr("zip", v)} /></div></div>
+        </div></Card>
+      )}
+
+      {section === "work" && (<>
+        <Card><div className="fp-col" style={{ gap: 10 }}>
+          <TextInput label="Current company" value={data.currentCompany} onChange={(v) => update("currentCompany", v)} />
+          <TextInput label="Current job title" value={data.currentTitle} onChange={(v) => update("currentTitle", v)} />
+          <TextInput label="Total experience" placeholder="e.g. 5 years" value={data.totalExperience} onChange={(v) => update("totalExperience", v)} />
+          <TextInput label="LinkedIn" value={data.linkedin} onChange={(v) => update("linkedin", v)} placeholder="linkedin.com/in/…" />
+          <TextInput label="GitHub" value={data.github} onChange={(v) => update("github", v)} />
+          <TextInput label="Portfolio / website" value={data.portfolio} onChange={(v) => update("portfolio", v)} />
+          <ListInput label="Skills" value={data.skills} onChange={(v) => update("skills", v)} placeholder="C++, Python, Linux" />
+          <ListInput label="Technologies" value={data.technologies} onChange={(v) => update("technologies", v)} placeholder="Docker, PostgreSQL" />
+          <Field label="Professional summary" help="Used to draft answers — only facts you write here are ever used.">
+            <textarea className="fp-textarea" rows={4} value={data.summary} onChange={(e) => update("summary", e.target.value)} aria-label="Professional summary" />
+          </Field>
+        </div></Card>
+        <EmploymentList entries={data.employment} onChange={(e) => update("employment", e)} />
+      </>)}
+
+      {section === "prefs" && (
+        <Card><div className="fp-col" style={{ gap: 10 }}>
+          <div className="fp-help" style={{ marginTop: -2 }}>These are always shown for your review before they're filled.</div>
+          <TextInput label="Expected salary" value={data.expectedSalary} onChange={(v) => update("expectedSalary", v)} placeholder="e.g. 30 LPA / $120,000" />
+          <TextInput label="Current salary" value={data.currentSalary} onChange={(v) => update("currentSalary", v)} />
+          <TextInput label="Notice period / availability" value={data.noticePeriod} onChange={(v) => update("noticePeriod", v)} placeholder="e.g. 30 days" />
+          <TextInput label="Work authorization" value={data.workAuthorization} onChange={(v) => update("workAuthorization", v)} placeholder="e.g. Citizen, H-1B" />
+          <YesNoSelect label="Authorized to work (where you apply)" value={data.authorizedToWork} onChange={(v) => update("authorizedToWork", v)} />
+          <YesNoSelect label="Will you require visa sponsorship?" value={data.requiresSponsorship} onChange={(v) => update("requiresSponsorship", v)} />
+          <YesNoSelect label="Willing to relocate?" value={data.willingToRelocate} onChange={(v) => update("willingToRelocate", v)} />
+          <TextInput label="Preferred locations" value={data.preferredLocations} onChange={(v) => update("preferredLocations", v)} />
+        </div></Card>
+      )}
+
+      {section === "education" && <EducationList entries={data.education} onChange={(e) => update("education", e)} />}
+      {section === "custom" && <CustomList fields={data.customFields} onChange={(f) => update("customFields", f)} />}
     </div>
   );
 }
 
-// ─── Section components ───────────────────────────────────────────────────────
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function EmploymentList({ entries, onChange }: { entries: EmploymentEntry[]; onChange: (e: EmploymentEntry[]) => void }) {
+  const set = (id: string, patch: Partial<EmploymentEntry>) => onChange(entries.map((e) => (e.id === id ? { ...e, ...patch } : e)));
   return (
-    <div className="space-y-1">
-      <label className="block text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{label}</label>
-      {children}
-    </div>
-  );
-}
-
-const inputCls = "input-water";
-
-// Lets the user type freely (commas included) and only parses on blur.
-function CommaSeparatedInput({
-  value,
-  onChange,
-  rows = 2,
-  placeholder,
-}: {
-  value: string[];
-  onChange: (v: string[]) => void;
-  rows?: number;
-  placeholder?: string;
-}) {
-  const serialized = value.join(", ");
-  const [text, setText] = useState(serialized);
-
-  // Keep in sync when parent resets (e.g., import profile)
-  useEffect(() => {
-    setText(serialized);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serialized]);
-
-  function commit(raw: string) {
-    const parsed = raw.split(",").map((s) => s.trim()).filter(Boolean);
-    onChange(parsed);
-    setText(parsed.join(", "));
-  }
-
-  return (
-    <textarea
-      className={`${inputCls} resize-none`}
-      rows={rows}
-      placeholder={placeholder}
-      value={text}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={(e) => commit(e.target.value)}
-    />
-  );
-}
-
-function PersonalSection({
-  data,
-  update,
-  updateAddress,
-}: {
-  data: UserProfile;
-  update: <K extends keyof UserProfile>(k: K, v: UserProfile[K]) => void;
-  updateAddress: (k: keyof UserProfile["address"], v: string) => void;
-}) {
-  return (
-    <>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="First Name">
-          <input className={inputCls} value={data.firstName} onChange={(e) => update("firstName", e.target.value)} />
-        </Field>
-        <Field label="Last Name">
-          <input className={inputCls} value={data.lastName} onChange={(e) => update("lastName", e.target.value)} />
-        </Field>
-      </div>
-      <Field label="Middle Name">
-        <input className={inputCls} value={data.middleName} onChange={(e) => update("middleName", e.target.value)} />
-      </Field>
-      <Field label="Email">
-        <input type="email" className={inputCls} value={data.email} onChange={(e) => update("email", e.target.value)} />
-      </Field>
-      <Field label="Phone">
-        <input type="tel" className={inputCls} value={data.phone} onChange={(e) => update("phone", e.target.value)} />
-      </Field>
-      <Field label="Date of Birth">
-        <input type="date" className={inputCls} value={data.dateOfBirth} onChange={(e) => update("dateOfBirth", e.target.value)} />
-      </Field>
-      <div className="pt-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Address</div>
-      <Field label="Street">
-        <input className={inputCls} value={data.address.street} onChange={(e) => updateAddress("street", e.target.value)} />
-      </Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="City">
-          <input className={inputCls} value={data.address.city} onChange={(e) => updateAddress("city", e.target.value)} />
-        </Field>
-        <Field label="State">
-          <input className={inputCls} value={data.address.state} onChange={(e) => updateAddress("state", e.target.value)} />
-        </Field>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Country">
-          <input className={inputCls} value={data.address.country} onChange={(e) => updateAddress("country", e.target.value)} />
-        </Field>
-        <Field label="ZIP/PIN">
-          <input className={inputCls} value={data.address.zip} onChange={(e) => updateAddress("zip", e.target.value)} />
-        </Field>
-      </div>
-    </>
-  );
-}
-
-function ProfessionalSection({
-  data,
-  update,
-}: {
-  data: UserProfile;
-  update: <K extends keyof UserProfile>(k: K, v: UserProfile[K]) => void;
-}) {
-  return (
-    <>
-      <Field label="Current Company">
-        <input className={inputCls} value={data.currentCompany} onChange={(e) => update("currentCompany", e.target.value)} />
-      </Field>
-      <Field label="Current Title">
-        <input className={inputCls} value={data.currentTitle} onChange={(e) => update("currentTitle", e.target.value)} />
-      </Field>
-      <Field label="Total Experience">
-        <input className={inputCls} placeholder="e.g. 5 years" value={data.totalExperience} onChange={(e) => update("totalExperience", e.target.value)} />
-      </Field>
-      <Field label="LinkedIn URL">
-        <input type="url" className={inputCls} value={data.linkedin} onChange={(e) => update("linkedin", e.target.value)} />
-      </Field>
-      <Field label="GitHub URL">
-        <input type="url" className={inputCls} value={data.github} onChange={(e) => update("github", e.target.value)} />
-      </Field>
-      <Field label="Portfolio URL">
-        <input type="url" className={inputCls} value={data.portfolio} onChange={(e) => update("portfolio", e.target.value)} />
-      </Field>
-      <Field label="Skills (comma-separated)">
-        <CommaSeparatedInput
-          value={data.skills}
-          onChange={(v) => update("skills", v)}
-          placeholder="e.g. React, Node.js, Python"
-        />
-      </Field>
-      <Field label="Technologies (comma-separated)">
-        <CommaSeparatedInput
-          value={data.technologies}
-          onChange={(v) => update("technologies", v)}
-          placeholder="e.g. AWS, Docker, PostgreSQL"
-        />
-      </Field>
-      <Field label="Professional Summary">
-        <textarea className={`${inputCls} resize-none`} rows={4} value={data.summary} onChange={(e) => update("summary", e.target.value)} />
-      </Field>
-    </>
-  );
-}
-
-function EmploymentSection({
-  entries,
-  onChange,
-}: {
-  entries: EmploymentEntry[];
-  onChange: (e: EmploymentEntry[]) => void;
-}) {
-  function addEntry() {
-    onChange([
-      ...entries,
-      {
-        id: crypto.randomUUID(),
-        company: "",
-        title: "",
-        startDate: "",
-        endDate: null,
-        current: false,
-        description: "",
-      },
-    ]);
-  }
-
-  function updateEntry(id: string, key: keyof EmploymentEntry, value: unknown) {
-    onChange(entries.map((e) => (e.id === id ? { ...e, [key]: value } : e)));
-  }
-
-  function removeEntry(id: string) {
-    onChange(entries.filter((e) => e.id !== id));
-  }
-
-  return (
-    <div className="space-y-4">
-      {entries.map((entry) => (
-        <div key={entry.id} className="border border-brand-100 bg-brand-50/30 rounded-2xl p-3 space-y-2">
-          <div className="flex justify-between items-center">
-            <span className="text-[11px] font-bold text-brand-700">{entry.company || "New Entry"}</span>
-            <button onClick={() => removeEntry(entry.id)} className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-              <Trash2 size={13} />
-            </button>
-          </div>
-          <Field label="Company">
-            <input className={inputCls} value={entry.company} onChange={(e) => updateEntry(entry.id, "company", e.target.value)} />
-          </Field>
-          <Field label="Title">
-            <input className={inputCls} value={entry.title} onChange={(e) => updateEntry(entry.id, "title", e.target.value)} />
-          </Field>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Start">
-              <input type="month" className={inputCls} value={entry.startDate} onChange={(e) => updateEntry(entry.id, "startDate", e.target.value)} />
-            </Field>
-            <Field label="End">
-              <input type="month" className={inputCls} value={entry.endDate || ""} disabled={entry.current} onChange={(e) => updateEntry(entry.id, "endDate", e.target.value)} />
-            </Field>
-          </div>
-          <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
-            <input type="checkbox" checked={entry.current} onChange={(e) => updateEntry(entry.id, "current", e.target.checked)} />
-            Current position
-          </label>
-          <Field label="Description">
-            <textarea className={`${inputCls} resize-none`} rows={2} value={entry.description} onChange={(e) => updateEntry(entry.id, "description", e.target.value)} />
-          </Field>
-        </div>
+    <div className="fp-col">
+      <div className="fp-row"><h2 className="fp-h2" style={{ flex: 1 }}>Employment history</h2>
+        <Button size="sm" onClick={() => onChange([...entries, { id: uid(), company: "", title: "", startDate: "", endDate: "", current: entries.length === 0, description: "" }])}><Plus size={13} /> Add job</Button></div>
+      {entries.length === 0 && <EmptyState icon={<Briefcase size={22} />} title="No jobs added" body="Add your most recent job first. Forms with a work-history section will be filled in order." />}
+      {entries.map((e, i) => (
+        <Card key={e.id} tight><div className="fp-col" style={{ gap: 8 }}>
+          <div className="fp-row"><span className="fp-eyebrow" style={{ flex: 1 }}>{i === 0 ? "Most recent" : `Job ${i + 1}`}</span>
+            <Button variant="ghost" icon size="sm" aria-label={`Remove job ${i + 1}`} onClick={() => onChange(entries.filter((x) => x.id !== e.id))}><Trash2 size={14} /></Button></div>
+          <TextInput label="Company" value={e.company} onChange={(v) => set(e.id, { company: v })} />
+          <TextInput label="Title" value={e.title} onChange={(v) => set(e.id, { title: v })} />
+          <div className="fp-row"><div style={{ flex: 1 }}><TextInput label="Start" type="month" value={e.startDate} onChange={(v) => set(e.id, { startDate: v })} /></div>
+            <div style={{ flex: 1 }}><TextInput label="End" type="month" value={e.endDate ?? ""} disabled={e.current} onChange={(v) => set(e.id, { endDate: v })} /></div></div>
+          <label className="fp-row"><input type="checkbox" checked={e.current} onChange={(ev) => set(e.id, { current: ev.target.checked, endDate: ev.target.checked ? null : e.endDate })} /> I currently work here</label>
+          <Field label="What you did"><textarea className="fp-textarea" rows={3} value={e.description} onChange={(ev) => set(e.id, { description: ev.target.value })} aria-label="Job description" /></Field>
+        </div></Card>
       ))}
-      <button onClick={addEntry} className="flex items-center gap-1.5 text-brand-600 text-[12px] font-bold hover:text-brand-700 transition-colors">
-        <Plus size={16} /> Add Employment
-      </button>
     </div>
   );
 }
 
-function EducationSection({
-  entries,
-  onChange,
-}: {
-  entries: EducationEntry[];
-  onChange: (e: EducationEntry[]) => void;
-}) {
-  function addEntry() {
-    onChange([
-      ...entries,
-      { id: crypto.randomUUID(), institution: "", degree: "", field: "", startDate: "", endDate: "", gpa: "", certifications: [] },
-    ]);
-  }
-
-  function updateEntry(id: string, key: keyof EducationEntry, value: unknown) {
-    onChange(entries.map((e) => (e.id === id ? { ...e, [key]: value } : e)));
-  }
-
-  function removeEntry(id: string) {
-    onChange(entries.filter((e) => e.id !== id));
-  }
-
+function EducationList({ entries, onChange }: { entries: EducationEntry[]; onChange: (e: EducationEntry[]) => void }) {
+  const set = (id: string, patch: Partial<EducationEntry>) => onChange(entries.map((e) => (e.id === id ? { ...e, ...patch } : e)));
   return (
-    <div className="space-y-4">
-      {entries.map((entry) => (
-        <div key={entry.id} className="border border-violet-100 bg-violet-50/30 rounded-2xl p-3 space-y-2">
-          <div className="flex justify-between items-center">
-            <span className="text-[11px] font-bold text-violet-700">{entry.institution || "New Entry"}</span>
-            <button onClick={() => removeEntry(entry.id)} className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-              <Trash2 size={13} />
-            </button>
-          </div>
-          <Field label="Institution">
-            <input className={inputCls} value={entry.institution} onChange={(e) => updateEntry(entry.id, "institution", e.target.value)} />
-          </Field>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Degree">
-              <input className={inputCls} value={entry.degree} onChange={(e) => updateEntry(entry.id, "degree", e.target.value)} />
-            </Field>
-            <Field label="Field of Study">
-              <input className={inputCls} value={entry.field} onChange={(e) => updateEntry(entry.id, "field", e.target.value)} />
-            </Field>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Start Year">
-              <input type="month" className={inputCls} value={entry.startDate} onChange={(e) => updateEntry(entry.id, "startDate", e.target.value)} />
-            </Field>
-            <Field label="End Year">
-              <input type="month" className={inputCls} value={entry.endDate} onChange={(e) => updateEntry(entry.id, "endDate", e.target.value)} />
-            </Field>
-          </div>
-          <Field label="GPA / CGPA">
-            <input className={inputCls} value={entry.gpa} onChange={(e) => updateEntry(entry.id, "gpa", e.target.value)} />
-          </Field>
-        </div>
+    <div className="fp-col">
+      <div className="fp-row"><h2 className="fp-h2" style={{ flex: 1 }}>Education</h2>
+        <Button size="sm" onClick={() => onChange([...entries, { id: uid(), institution: "", degree: "", field: "", startDate: "", endDate: "", gpa: "", certifications: [] }])}><Plus size={13} /> Add</Button></div>
+      {entries.length === 0 && <EmptyState icon={<GraduationCap size={22} />} title="No education added" body="Add your highest qualification first — forms use the first entry for 'University', 'Degree' and 'GPA'." />}
+      {entries.map((e, i) => (
+        <Card key={e.id} tight><div className="fp-col" style={{ gap: 8 }}>
+          <div className="fp-row"><span className="fp-eyebrow" style={{ flex: 1 }}>{i === 0 ? "Highest / latest" : `Entry ${i + 1}`}</span>
+            <Button variant="ghost" icon size="sm" aria-label={`Remove education ${i + 1}`} onClick={() => onChange(entries.filter((x) => x.id !== e.id))}><Trash2 size={14} /></Button></div>
+          <TextInput label="Institution" value={e.institution} onChange={(v) => set(e.id, { institution: v })} />
+          <div className="fp-row"><div style={{ flex: 1 }}><TextInput label="Degree" value={e.degree} onChange={(v) => set(e.id, { degree: v })} placeholder="B.Tech" /></div>
+            <div style={{ flex: 1 }}><TextInput label="Field of study" value={e.field} onChange={(v) => set(e.id, { field: v })} /></div></div>
+          <div className="fp-row"><div style={{ flex: 1 }}><TextInput label="Start year" value={e.startDate} onChange={(v) => set(e.id, { startDate: v })} /></div>
+            <div style={{ flex: 1 }}><TextInput label="End year" value={e.endDate} onChange={(v) => set(e.id, { endDate: v })} /></div></div>
+          <TextInput label="GPA / CGPA" value={e.gpa} onChange={(v) => set(e.id, { gpa: v })} />
+        </div></Card>
       ))}
-      <button onClick={addEntry} className="flex items-center gap-1.5 text-brand-600 text-[12px] font-bold hover:text-brand-700 transition-colors">
-        <Plus size={16} /> Add Education
-      </button>
     </div>
   );
 }
 
-function CustomSection({
-  fields,
-  onChange,
-}: {
-  fields: CustomField[];
-  onChange: (f: CustomField[]) => void;
-}) {
-  function addField() {
-    onChange([...fields, { key: "", label: "", value: "" }]);
-  }
-
-  function updateField(idx: number, key: keyof CustomField, value: string) {
-    onChange(fields.map((f, i) => (i === idx ? { ...f, [key]: value } : f)));
-  }
-
-  function removeField(idx: number) {
-    onChange(fields.filter((_, i) => i !== idx));
-  }
-
+function CustomList({ fields, onChange }: { fields: CustomField[]; onChange: (f: CustomField[]) => void }) {
+  const set = (i: number, patch: Partial<CustomField>) => onChange(fields.map((f, j) => (j === i ? { ...f, ...patch } : f)));
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-gray-500">
-        Add any extra information you want FormPilot to use when filling forms.
-      </p>
-      {fields.map((field, idx) => (
-        <div key={idx} className="border border-amber-100 bg-amber-50/30 rounded-2xl p-3 space-y-2">
-          <div className="flex justify-between items-center">
-            <span className="text-[11px] font-bold text-amber-700">Custom Field {idx + 1}</span>
-            <button onClick={() => removeField(idx)} className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-              <Trash2 size={13} />
-            </button>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Key (identifier)">
-              <input className={inputCls} placeholder="notice_period" value={field.key} onChange={(e) => updateField(idx, "key", e.target.value)} />
-            </Field>
-            <Field label="Label (display)">
-              <input className={inputCls} placeholder="Notice Period" value={field.label} onChange={(e) => updateField(idx, "label", e.target.value)} />
-            </Field>
-          </div>
-          <Field label="Value">
-            <input className={inputCls} placeholder="60 days" value={field.value} onChange={(e) => updateField(idx, "value", e.target.value)} />
-          </Field>
-        </div>
+    <div className="fp-col">
+      <div className="fp-row"><h2 className="fp-h2" style={{ flex: 1 }}>Custom fields</h2>
+        <Button size="sm" onClick={() => onChange([...fields, { key: "", label: "", value: "" }])}><Plus size={13} /> Add</Button></div>
+      <div className="fp-help">Anything forms ask that isn't covered above. Matched by the label text.</div>
+      {fields.length === 0 && <EmptyState icon={<Wand2 size={22} />} title="No custom fields" body="For example “Favourite editor”, “Referral code” or “Passport country” — add a label and a value." />}
+      {fields.map((f, i) => (
+        <Card key={i} tight><div className="fp-col" style={{ gap: 8 }}>
+          <TextInput label="Question label" value={f.label} onChange={(v) => set(i, { label: v, key: f.key || v.toLowerCase().replace(/\W+/g, "_") })} placeholder="e.g. Referral code" />
+          <TextInput label="Your answer" value={f.value} onChange={(v) => set(i, { value: v })} />
+          <Button variant="ghost" size="sm" onClick={() => onChange(fields.filter((_, j) => j !== i))}><Trash2 size={13} /> Remove</Button>
+        </div></Card>
       ))}
-      <button onClick={addField} className="flex items-center gap-1 text-brand-600 text-sm font-medium hover:text-brand-700">
-        <Plus size={16} /> Add Custom Field
-      </button>
     </div>
   );
 }

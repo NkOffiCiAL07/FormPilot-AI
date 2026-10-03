@@ -1,503 +1,159 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Upload, Trash2, FileText, Download, Tag, X,
-  CheckCircle, AlertTriangle, File, FileImage,
-} from "lucide-react";
-import {
-  StoredDocument,
-  getDocuments,
-  saveDocument,
-  deleteDocument,
-  readFileAsBase64,
-  base64ToObjectUrl,
-} from "../shared/storage";
+import React, { useEffect, useRef, useState } from "react";
+import { Download, Eye, FileText, Pencil, Plus, Search, Star, Trash2, Upload } from "lucide-react";
+import { api, ApiError, DocMeta } from "../shared/api";
+import { Badge, Button, Card, ConfirmDialog, Dialog, EmptyState, ErrorNotice, Field, Notice, Skeleton, Tabs, TextInput, useAsync } from "../ui/components";
 
-type Category = StoredDocument["category"];
+const CATEGORIES: { id: DocMeta["category"]; label: string }[] = [
+  { id: "resume", label: "Resume" }, { id: "cover_letter", label: "Cover letter" }, { id: "certificate", label: "Certificate" },
+  { id: "transcript", label: "Transcript" }, { id: "id", label: "ID document" }, { id: "other", label: "Other" },
+];
+const catLabel = (c: string) => CATEGORIES.find((x) => x.id === c)?.label ?? c;
+const fmtSize = (n: number) => (n > 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1000))} KB`);
 
-const CATEGORY_META: Record<Category, { label: string; color: string; dot: string }> = {
-  resume:       { label: "Resume",       color: "bg-brand-50 text-brand-700 border-brand-100",     dot: "bg-brand-400"   },
-  cover_letter: { label: "Cover Letter", color: "bg-emerald-50 text-emerald-700 border-emerald-100",dot: "bg-emerald-400" },
-  certificate:  { label: "Certificate",  color: "bg-amber-50 text-amber-700 border-amber-100",     dot: "bg-amber-400"   },
-  transcript:   { label: "Transcript",   color: "bg-violet-50 text-violet-700 border-violet-100",  dot: "bg-violet-400"  },
-  id:           { label: "ID / Passport",color: "bg-red-50 text-red-700 border-red-100",            dot: "bg-red-400"     },
-  other:        { label: "Other",        color: "bg-gray-50 text-gray-600 border-gray-200",         dot: "bg-gray-400"    },
-};
-
-// unlimitedStorage permission removes the 5MB cap — allow up to 20MB per file
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
-
-const ACCEPTED = ".pdf,.doc,.docx,.txt,.rtf,.odt,.png,.jpg,.jpeg,.webp,.html";
-
-function fileIcon(filename: string) {
-  const ext = filename.split(".").pop()?.toLowerCase() || "";
-  if (["png", "jpg", "jpeg", "webp"].includes(ext))
-    return <FileImage size={16} className="text-emerald-500" />;
-  if (ext === "pdf") return <File size={16} className="text-red-500" />;
-  return <FileText size={16} className="text-brand-500" />;
-}
-
-function guessCategoryFromFilename(name: string): Category {
-  const lower = name.toLowerCase();
-  if (lower.includes("resume") || lower.includes("cv")) return "resume";
-  if (lower.includes("cover") || lower.includes("letter")) return "cover_letter";
-  if (lower.includes("certificate") || lower.includes("cert")) return "certificate";
-  if (lower.includes("transcript") || lower.includes("grade")) return "transcript";
-  if (lower.includes("passport") || lower.includes("id") || lower.includes("aadhaar") || lower.includes("pan")) return "id";
-  return "other";
-}
+type Filter = "all" | DocMeta["category"];
 
 export default function DocumentsManager() {
-  const [docs, setDocs]                     = useState<StoredDocument[]>([]);
-  const [filter, setFilter]                 = useState<Category | "all">("all");
-  const [uploading, setUploading]           = useState(false);
-  const [uploadDone, setUploadDone]         = useState(false);
-  const [error, setError]                   = useState("");
-  const [showUploadForm, setShowUploadForm] = useState(false);
-  const [dragging, setDragging]             = useState(false);
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+  const { data: docs, error, loading, reload } = useAsync(() => api.documents.list(q, filter === "all" ? "" : filter), [q, filter]);
+  const [editing, setEditing] = useState<{ doc?: DocMeta; file?: File } | null>(null);
+  const [preview, setPreview] = useState<DocMeta | null>(null);
+  const [removing, setRemoving] = useState<DocMeta | null>(null);
+  const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const [pendingFile, setPendingFile]         = useState<File | null>(null);
-  const [pendingName, setPendingName]         = useState("");
-  const [pendingCategory, setPendingCategory] = useState<Category>("resume");
-  const [pendingTags, setPendingTags]         = useState("");
+  const pick = (f?: File | null) => { if (f) setEditing({ file: f }); };
+  const resumes = (docs ?? []).filter((d) => d.category === "resume");
 
-  useEffect(() => { load(); }, []);
-
-  async function load() { setDocs(await getDocuments()); }
-
-  function pickFile(file: File) {
-    if (file.size > MAX_FILE_BYTES) {
-      setError(`File too large (max 20 MB). Yours is ${(file.size / 1024 / 1024).toFixed(1)} MB.`);
-      return;
-    }
-    setError("");
-    setPendingFile(file);
-    const baseName = file.name.replace(/\.[^.]+$/, "");
-    setPendingName(baseName);
-    setPendingCategory(guessCategoryFromFilename(file.name));
-    // Auto-fill tags from filename words
-    const autoTags = baseName.split(/[\s_\-]+/).filter((w) => w.length > 2).slice(0, 4);
-    setPendingTags(autoTags.join(", "));
-    setShowUploadForm(true);
-  }
-
-  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) pickFile(file);
-  }
-
-  // Drag-and-drop handlers
-  const onDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(true);
-  }, []);
-  const onDragLeave = useCallback(() => setDragging(false), []);
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) pickFile(file);
-  }, []);
-
-  async function handleUpload() {
-    if (!pendingFile) return;
-    setUploading(true);
-    setError("");
-    try {
-      const data = await readFileAsBase64(pendingFile);
-      await saveDocument({
-        id: crypto.randomUUID(),
-        name: pendingName.trim() || pendingFile.name,
-        category: pendingCategory,
-        filename: pendingFile.name,
-        size: pendingFile.size,
-        mimeType: pendingFile.type || "application/octet-stream",
-        uploadedAt: new Date().toISOString(),
-        tags: pendingTags.split(",").map((t) => t.trim()).filter(Boolean),
-        data,
-      });
-      await load();
-      setUploadDone(true);
-      setTimeout(() => {
-        setUploadDone(false);
-        resetUploadForm();
-      }, 1800);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "";
-      if (msg.includes("QUOTA") || msg.includes("quota")) {
-        setError("Storage full. Delete some documents and try again.");
-      } else {
-        setError("Failed to save. Try a smaller file or different format.");
-      }
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  function resetUploadForm() {
-    setPendingFile(null);
-    setPendingName("");
-    setPendingCategory("resume");
-    setPendingTags("");
-    setShowUploadForm(false);
-    if (fileRef.current) fileRef.current.value = "";
-  }
-
-  async function handleDelete(id: string) {
-    await deleteDocument(id);
-    await load();
-  }
-
-  function handleDownload(doc: StoredDocument) {
-    const url = base64ToObjectUrl(doc.data, doc.mimeType);
+  async function download(d: DocMeta) {
+    const blob = await api.documents.blob(d.id);
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = doc.filename;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    a.href = url; a.download = `${d.name}${d.ext}`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
-  const filtered = filter === "all" ? docs : docs.filter((d) => d.category === filter);
-  const counts = docs.reduce((acc, d) => {
-    acc[d.category] = (acc[d.category] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-
   return (
-    <div className="flex flex-col h-full">
+    <div className="fp-screen"
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
+      onDrop={(e) => { e.preventDefault(); setDragging(false); pick(e.dataTransfer.files[0]); }}>
+      <div className="fp-row">
+        <h1 className="fp-h1" style={{ flex: 1 }}>Documents</h1>
+        <Button variant="primary" size="sm" onClick={() => fileRef.current?.click()}><Plus size={14} /> Add</Button>
+        <input ref={fileRef} type="file" hidden accept=".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg" onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} aria-label="Choose a document to upload" />
+      </div>
+      <div className="fp-help" style={{ marginTop: -6 }}>Files stay on this computer. They are never sent to an external AI service.</div>
 
-      {/* Filter pills */}
-      {docs.length > 0 && (
-        <div className="flex gap-1.5 px-3 pt-3 pb-2 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
-          <button
-            onClick={() => setFilter("all")}
-            className={`shrink-0 text-[11px] font-semibold px-3 py-1 rounded-full border transition-all ${
-              filter === "all"
-                ? "text-white border-transparent"
-                : "bg-white text-gray-500 border-gray-200 hover:border-brand-300 hover:text-brand-600"
-            }`}
-            style={filter === "all" ? { background: "linear-gradient(135deg,#6366f1,#8b5cf6)" } : {}}
-          >
-            All ({docs.length})
-          </button>
-          {(Object.keys(CATEGORY_META) as Category[]).map((cat) =>
-            counts[cat] ? (
-              <button
-                key={cat}
-                onClick={() => setFilter(cat)}
-                className={`shrink-0 text-[11px] font-semibold px-3 py-1 rounded-full border transition-all ${
-                  filter === cat
-                    ? "text-white border-transparent"
-                    : `${CATEGORY_META[cat].color} hover:opacity-80`
-                }`}
-                style={filter === cat ? { background: "linear-gradient(135deg,#6366f1,#8b5cf6)" } : {}}
-              >
-                {CATEGORY_META[cat].label} ({counts[cat]})
-              </button>
-            ) : null
-          )}
-        </div>
+      <div className="fp-row" style={{ position: "relative" }}>
+        <Search size={14} className="fp-muted" style={{ position: "absolute", left: 10 }} aria-hidden="true" />
+        <input className="fp-input" style={{ paddingLeft: 30 }} placeholder="Search documents" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search documents" />
+      </div>
+      <Tabs<Filter> label="Filter by type" value={filter} onChange={setFilter} tabs={[{ id: "all", label: "All" }, { id: "resume", label: "Resumes" }, { id: "cover_letter", label: "Letters" }, { id: "other", label: "Other" }]} />
+
+      {dragging && <Notice tone="info" title="Drop to upload">Release the file to add it.</Notice>}
+      {error ? <ErrorNotice error={error} onRetry={reload} /> : null}
+      {loading && !docs && <div className="fp-col"><Skeleton h={64} /><Skeleton h={64} /></div>}
+
+      {docs && docs.length === 0 && !error && (
+        <EmptyState icon={<FileText size={22} />}
+          title={q || filter !== "all" ? "Nothing matches" : "No resumes yet"}
+          body={q || filter !== "all" ? "Try a different search or type." : "Add your first resume so FormPilot can recommend the right version for each application."}
+          action={!q && filter === "all" ? <Button variant="primary" onClick={() => fileRef.current?.click()}><Upload size={14} /> Add resume</Button> : undefined} />
       )}
+      {resumes.length > 1 && !q && <Notice tone="info">You have {resumes.length} resumes. FormPilot recommends the best fit for each job and always asks before using one.</Notice>}
 
-      {/* Document list / upload form / empty state */}
-      <div className="flex-1 overflow-y-auto px-3 pb-2 space-y-2">
-
-        {/* Upload form */}
-        {showUploadForm && pendingFile && (
-          <div
-            className="rounded-2xl border p-4 space-y-3 animate-fade-up mt-3"
-            style={{
-              background: "linear-gradient(135deg,rgba(99,102,241,0.04),rgba(168,85,247,0.02))",
-              borderColor: "rgba(99,102,241,0.2)",
-            }}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                {fileIcon(pendingFile.name)}
-                <span className="text-[12px] font-bold text-gray-800">New Document</span>
+      {(docs ?? []).map((d) => (
+        <Card key={d.id} tight>
+          <div className="fp-row" style={{ alignItems: "flex-start" }}>
+            <div className="fp-col" style={{ flex: 1, gap: 3, minWidth: 0 }}>
+              <div className="fp-row"><strong className="fp-truncate">{d.name}</strong>{d.isDefault && <Badge tone="primary" icon={<Star size={10} />}>Default</Badge>}</div>
+              <div className="fp-row" style={{ flexWrap: "wrap", gap: 4 }}>
+                <Badge>{catLabel(d.category)}</Badge><span className="fp-muted" style={{ fontSize: 11 }}>{fmtSize(d.size)} · {new Date(d.updatedAt).toLocaleDateString()}</span>
               </div>
-              <button
-                onClick={resetUploadForm}
-                className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100"
-              >
-                <X size={13} />
-              </button>
-            </div>
-
-            {/* File info chip */}
-            <div className="flex items-center gap-2 bg-white rounded-xl px-3 py-2 border border-gray-100">
-              {fileIcon(pendingFile.name)}
-              <div className="flex-1 min-w-0">
-                <div className="text-[11px] font-semibold text-gray-700 truncate">{pendingFile.name}</div>
-                <div className="text-[10px] text-gray-400">{(pendingFile.size / 1024).toFixed(0)} KB</div>
-              </div>
-            </div>
-
-            {/* Fields */}
-            <div className="space-y-2">
-              <UploadField label="Display Name">
-                <input
-                  className="input-water"
-                  value={pendingName}
-                  onChange={(e) => setPendingName(e.target.value)}
-                  placeholder="e.g. Software Engineer Resume"
-                />
-              </UploadField>
-
-              <UploadField label="Category">
-                <select
-                  className="input-water"
-                  value={pendingCategory}
-                  onChange={(e) => setPendingCategory(e.target.value as Category)}
-                >
-                  {(Object.entries(CATEGORY_META) as [Category, { label: string }][]).map(([k, v]) => (
-                    <option key={k} value={k}>{v.label}</option>
-                  ))}
-                </select>
-              </UploadField>
-
-              <UploadField label="Tags (comma-separated)">
-                <input
-                  className="input-water"
-                  value={pendingTags}
-                  onChange={(e) => setPendingTags(e.target.value)}
-                  placeholder="backend, python, senior"
-                />
-              </UploadField>
-            </div>
-
-            {error && (
-              <div className="flex items-start gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2">
-                <AlertTriangle size={12} className="text-red-500 shrink-0 mt-0.5" />
-                <p className="text-[11px] text-red-600 leading-relaxed">{error}</p>
-              </div>
-            )}
-
-            {/* Save button */}
-            <button
-              onClick={handleUpload}
-              disabled={uploading || uploadDone || !pendingName.trim()}
-              className="w-full flex items-center justify-center gap-2 text-white text-[13px] font-bold py-2.5 rounded-xl disabled:opacity-60 transition-all active:scale-[0.98]"
-              style={{
-                background: uploadDone
-                  ? "linear-gradient(135deg,#10b981,#059669)"
-                  : "linear-gradient(135deg,#6366f1,#8b5cf6)",
-                boxShadow: uploadDone
-                  ? "0 4px 14px rgba(16,185,129,0.35)"
-                  : "0 4px 14px rgba(99,102,241,0.35)",
-              }}
-            >
-              {uploading ? (
-                <>
-                  <div
-                    className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"
-                  />
-                  Saving…
-                </>
-              ) : uploadDone ? (
-                <><CheckCircle size={15} /> Saved!</>
-              ) : (
-                <><Upload size={15} /> Save Document</>
+              {d.resume?.targetRole && <div className="fp-sub" style={{ fontSize: 12 }}>Target: {d.resume.targetRole}</div>}
+              {d.description && <div className="fp-sub" style={{ fontSize: 12 }}>{d.description}</div>}
+              {(d.tags.length > 0 || (d.resume?.skills.length ?? 0) > 0) && (
+                <div className="fp-row" style={{ flexWrap: "wrap", gap: 4 }}>{[...(d.resume?.skills ?? []), ...d.tags].slice(0, 8).map((t) => <Badge key={t} tone="ai">{t}</Badge>)}</div>
               )}
-            </button>
-          </div>
-        )}
-
-        {/* Empty state with drop zone */}
-        {docs.length === 0 && !showUploadForm && (
-          <div
-            className="mx-0 mt-3 flex flex-col items-center justify-center py-8 gap-4 rounded-2xl border-2 border-dashed transition-all cursor-pointer animate-fade-up"
-            style={{
-              borderColor: dragging ? "rgba(99,102,241,0.5)" : "rgba(99,102,241,0.18)",
-              background: dragging
-                ? "rgba(99,102,241,0.06)"
-                : "rgba(99,102,241,0.02)",
-            }}
-            onDragOver={onDragOver}
-            onDragLeave={onDragLeave}
-            onDrop={onDrop}
-            onClick={() => { setError(""); fileRef.current?.click(); }}
-          >
-            <div
-              className="w-14 h-14 flex items-center justify-center transition-transform"
-              style={{
-                background: dragging
-                  ? "linear-gradient(135deg,rgba(99,102,241,0.2),rgba(168,85,247,0.12))"
-                  : "linear-gradient(135deg,rgba(99,102,241,0.1),rgba(168,85,247,0.06))",
-                borderRadius: "60% 40% 30% 70% / 60% 30% 70% 40%",
-                animation: "liquid 5s ease-in-out infinite",
-                transform: dragging ? "scale(1.1)" : "scale(1)",
-              }}
-            >
-              <Upload size={22} className="text-brand-500" />
-            </div>
-            <div className="text-center space-y-1">
-              <p className="text-sm font-bold text-gray-700">
-                {dragging ? "Drop to upload!" : "Upload your resume"}
-              </p>
-              <p className="text-[11px] text-gray-400 leading-relaxed px-4">
-                {dragging
-                  ? "Release to start upload"
-                  : "Drag & drop here or click to browse\nPDF, DOC, DOCX, TXT, Image · up to 20 MB"}
-              </p>
+              {d.category === "resume" && !d.resume?.hasText && !(d.resume?.skills.length) && <div className="fp-help">Add skills so matching works for this resume.</div>}
             </div>
           </div>
-        )}
+          <div className="fp-row" style={{ marginTop: 8, flexWrap: "wrap", gap: 4 }}>
+            <Button size="sm" onClick={() => setPreview(d)}><Eye size={13} /> Preview</Button>
+            <Button size="sm" variant="ghost" onClick={() => download(d)} aria-label={`Download ${d.name}`}><Download size={13} /></Button>
+            <Button size="sm" variant="ghost" onClick={() => setEditing({ doc: d })} aria-label={`Edit ${d.name}`}><Pencil size={13} /></Button>
+            {!d.isDefault && <Button size="sm" variant="ghost" onClick={async () => { await api.documents.update(d.id, { isDefault: true }); reload(); }} aria-label={`Make ${d.name} the default`}><Star size={13} /> Default</Button>}
+            <span className="fp-spacer" />
+            <Button size="sm" variant="ghost" onClick={() => setRemoving(d)} aria-label={`Delete ${d.name}`}><Trash2 size={13} /></Button>
+          </div>
+        </Card>
+      ))}
 
-        {/* Document cards */}
-        {filtered.map((doc, idx) => (
-          <DocumentCard
-            key={doc.id}
-            doc={doc}
-            delay={idx * 40}
-            onDelete={() => handleDelete(doc.id)}
-            onDownload={() => handleDownload(doc)}
-          />
-        ))}
-      </div>
-
-      {/* Bottom upload bar (when docs exist) */}
-      {!showUploadForm && (
-        <div
-          className="shrink-0 px-3 py-3 border-t border-gray-100"
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
-        >
-          {error && (
-            <div className="flex items-start gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2 mb-2">
-              <AlertTriangle size={12} className="text-red-500 shrink-0 mt-0.5" />
-              <p className="text-[11px] text-red-600">{error}</p>
-            </div>
-          )}
-          <input
-            ref={fileRef}
-            type="file"
-            className="hidden"
-            accept={ACCEPTED}
-            onChange={handleFileSelect}
-          />
-          <button
-            onClick={() => { setError(""); fileRef.current?.click(); }}
-            className={`w-full flex items-center justify-center gap-2 text-white text-[13px] font-bold py-3 rounded-2xl transition-all active:scale-[0.98] ${
-              dragging ? "scale-[1.02]" : ""
-            }`}
-            style={{
-              background: dragging
-                ? "linear-gradient(135deg,#4f46e5,#7c3aed,#9333ea)"
-                : "linear-gradient(135deg,#6366f1,#8b5cf6,#a855f7)",
-              boxShadow: dragging
-                ? "0 8px 28px rgba(99,102,241,0.6)"
-                : "0 4px 18px rgba(99,102,241,0.4)",
-            }}
-          >
-            <Upload size={15} />
-            {dragging ? "Drop file here!" : "Upload Document"}
-          </button>
-          <p className="text-center text-[10px] text-gray-400 mt-1.5">
-            PDF · DOC · DOCX · TXT · Image · up to 20 MB
-          </p>
-        </div>
-      )}
+      {editing && <DocForm {...editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload(); }} />}
+      {preview && <Preview doc={preview} onClose={() => setPreview(null)} onDownload={() => download(preview)} />}
+      {removing && <ConfirmDialog title="Delete document?" confirmLabel="Delete" body={<>“{removing.name}” will be permanently removed from this computer.</>}
+        onClose={() => setRemoving(null)} onConfirm={async () => { await api.documents.remove(removing.id); reload(); }} />}
     </div>
   );
 }
 
-function UploadField({ label, children }: { label: string; children: React.ReactNode }) {
+function DocForm({ doc, file, onClose, onDone }: { doc?: DocMeta; file?: File; onClose: () => void; onDone: () => void }) {
+  const [name, setName] = useState(doc?.name ?? file?.name.replace(/\.[^.]+$/, "") ?? "");
+  const [category, setCategory] = useState<DocMeta["category"]>(doc?.category ?? (/resume|cv/i.test(file?.name ?? "") ? "resume" : "other"));
+  const [description, setDescription] = useState(doc?.description ?? "");
+  const [tags, setTags] = useState((doc?.tags ?? []).join(", "));
+  const [targetRole, setTargetRole] = useState(doc?.resume?.targetRole ?? "");
+  const [skills, setSkills] = useState((doc?.resume?.skills ?? []).join(", "));
+  const [isDefault, setIsDefault] = useState(doc?.isDefault ?? false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<unknown>(null);
+  const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
+
+  async function submit() {
+    setBusy(true); setErr(null);
+    try {
+      if (doc) await api.documents.update(doc.id, { name, category, description, tags: list(tags), ...(category === "resume" ? { targetRole, skills: list(skills) } : {}), ...(isDefault ? { isDefault: true } : {}) });
+      else await api.documents.upload(file!, { name, category, description, tags: list(tags), targetRole, skills: list(skills), isDefault });
+      onDone();
+    } catch (e) { setErr(e); setBusy(false); }
+  }
   return (
-    <div className="space-y-1">
-      <label className="block text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{label}</label>
-      {children}
-    </div>
+    <Dialog title={doc ? "Edit document" : "Add document"} onClose={onClose} footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" busy={busy} disabled={!name.trim()} onClick={submit}>{doc ? "Save" : "Upload"}</Button></>}>
+      {file && <div className="fp-sub">{file.name} · {fmtSize(file.size)}</div>}
+      <TextInput label="Title" value={name} onChange={setName} />
+      <Field label="Type"><select className="fp-select" value={category} onChange={(e) => setCategory(e.target.value as DocMeta["category"])} aria-label="Document type">{CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select></Field>
+      <TextInput label="Description" value={description} onChange={setDescription} placeholder="Optional" />
+      <TextInput label="Tags" value={tags} onChange={setTags} help="Separate with commas" />
+      {category === "resume" && <>
+        <TextInput label="Target role" value={targetRole} onChange={setTargetRole} placeholder="e.g. Backend Engineer" />
+        <TextInput label="Key skills" value={skills} onChange={setSkills} help="Used to recommend this resume for matching jobs" />
+      </>}
+      <label className="fp-row"><input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} /> Use as my default {catLabel(category).toLowerCase()}</label>
+      {err ? <ErrorNotice error={err} /> : null}
+    </Dialog>
   );
 }
 
-function DocumentCard({
-  doc, delay, onDelete, onDownload,
-}: {
-  doc: StoredDocument;
-  delay: number;
-  onDelete: () => void;
-  onDownload: () => void;
-}) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const meta = CATEGORY_META[doc.category];
-
+function Preview({ doc, onClose, onDownload }: { doc: DocMeta; onClose: () => void; onDownload: () => void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [text, setText] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const isImg = /^image\//.test(doc.mimeType), isPdf = doc.mimeType === "application/pdf", isTxt = /^text\//.test(doc.mimeType);
+  useEffect(() => {
+    let u: string | null = null;
+    api.documents.blob(doc.id).then(async (b) => {
+      if (isTxt) setText((await b.text()).slice(0, 20000));
+      else if (isImg || isPdf) { u = URL.createObjectURL(b); setUrl(u); }
+    }).catch(setErr);
+    return () => { if (u) URL.revokeObjectURL(u); };
+  }, [doc.id, isImg, isPdf, isTxt]);
   return (
-    <div
-      className="bg-white rounded-2xl border border-gray-100 overflow-hidden animate-fade-up"
-      style={{ animationDelay: `${delay}ms`, boxShadow: "0 1px 6px rgba(0,0,0,0.04)" }}
-    >
-      <div className="px-3.5 py-3">
-        <div className="flex items-start gap-2.5">
-          {/* File icon */}
-          <div className="shrink-0 w-9 h-9 rounded-xl bg-brand-50 border border-brand-100 flex items-center justify-center">
-            {fileIcon(doc.filename)}
-          </div>
-
-          {/* Info */}
-          <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-semibold text-gray-800 truncate">{doc.name}</div>
-            <div className="text-[10px] text-gray-400 mt-0.5 truncate">
-              {doc.filename} · {doc.size > 1024 * 1024
-                ? `${(doc.size / 1024 / 1024).toFixed(1)} MB`
-                : `${(doc.size / 1024).toFixed(0)} KB`}
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              onClick={onDownload}
-              className="p-1.5 text-gray-300 hover:text-brand-500 transition-colors rounded-lg hover:bg-brand-50"
-              title="Download"
-            >
-              <Download size={13} />
-            </button>
-            {confirmDelete ? (
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={onDelete}
-                  className="text-[10px] font-semibold text-red-600 px-2 py-1 rounded-lg hover:bg-red-50"
-                >
-                  Delete
-                </button>
-                <button
-                  onClick={() => setConfirmDelete(false)}
-                  className="text-[10px] text-gray-500 px-1 py-1 rounded-lg"
-                >
-                  ✕
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setConfirmDelete(true)}
-                className="p-1.5 text-gray-300 hover:text-red-400 transition-colors rounded-lg hover:bg-red-50"
-                title="Delete"
-              >
-                <Trash2 size={13} />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Category + tags */}
-        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${meta.color}`}>
-            {meta.label}
-          </span>
-          {doc.tags.map((tag) => (
-            <span
-              key={tag}
-              className="text-[10px] bg-gray-50 text-gray-500 border border-gray-100 px-2 py-0.5 rounded-full flex items-center gap-1"
-            >
-              <Tag size={8} />
-              {tag}
-            </span>
-          ))}
-        </div>
-      </div>
-    </div>
+    <Dialog title={doc.name} onClose={onClose} footer={<><Button onClick={onDownload}><Download size={13} /> Download</Button>{url && isPdf && <Button onClick={() => chrome.tabs.create({ url })}>Open in tab</Button>}</>}>
+      {err ? <ErrorNotice error={err} /> : null}
+      {isImg && url && <img src={url} alt={doc.name} style={{ maxWidth: "100%", borderRadius: 10 }} />}
+      {isPdf && url && <iframe src={url} title={`Preview of ${doc.name}`} style={{ width: "100%", height: 360, border: 0, borderRadius: 10, background: "#fff" }} />}
+      {isTxt && text !== null && <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, maxHeight: 360, overflow: "auto", margin: 0 }}>{text}</pre>}
+      {!isImg && !isPdf && !isTxt && <Notice tone="info">No inline preview for this file type. Use Download to open it.</Notice>}
+    </Dialog>
   );
 }

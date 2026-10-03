@@ -1,185 +1,211 @@
-import { scanForms, watchForNewFields } from "../engines/formScanner";
-import { fillAllFields, highlightFields } from "../engines/autofill";
+import { scanForms, watchForNewFields, findByFpId } from "../engines/formScanner";
+import { fillItems, FillItem, highlightFields, undoFill, undoCount, clearHighlights } from "../engines/autofill";
 import { ExtMessage, FieldResult, NormalizedField } from "../shared/types";
+import { extractPageContext } from "./pageContext";
+import { comboOf } from "../shared/quickCopy";
+import { quickValue } from "../shared/quickCopy";
+import { normalizeProfile } from "../shared/types";
 
-let currentResults: FieldResult[] = [];
-let observer: MutationObserver | null = null;
-
-// Safe cross-origin access — window.top from a cross-origin iframe throws SecurityError
-function safeTopHref(): string {
-  try { return window.top?.location.href ?? location.href; } catch { return location.href; }
-}
-function safeTopTitle(): string {
-  try { return window.top?.document.title ?? document.title; } catch { return document.title; }
-}
+const IS_TOP = window.self === window.top;
 
 // Skip noise frames (tracking pixels, tiny ad iframes)
 function shouldSkipFrame(): boolean {
-  if (window.self === window.top) return false;
+  if (IS_TOP) return false;
   try {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    if (w < 200 || h < 200) return true;
+    if (window.innerWidth < 200 || window.innerHeight < 120) return true;
   } catch { return true; }
-  const src = location.href;
-  const skip = ["/tracking", "/pixel", "/analytics", "doubleclick", "googlesyndication", "facebook.net/tr", "google-analytics"];
-  return skip.some((p) => src.includes(p));
+  return ["/tracking", "/pixel", "/analytics", "doubleclick", "googlesyndication", "facebook.net/tr", "google-analytics"].some((p) => location.href.includes(p));
 }
 
-// ─── Scan & notify ────────────────────────────────────────────────────────────
-
-function doScan(): NormalizedField[] {
-  return scanForms();
+function send(msg: ExtMessage) {
+  try {
+    chrome.runtime.sendMessage(msg).catch(() => {});
+  } catch { /* extension reloaded — the old content script is orphaned */ }
 }
 
-function notifyBackground(fields: NormalizedField[]) {
+function notifyFields(fields: NormalizedField[]) {
   if (fields.length === 0) return;
-  console.debug(`[FormPilot] Sending ${fields.length} fields to background`);
-  chrome.runtime.sendMessage<ExtMessage>({
-    type: "FORM_SCANNED",
-    payload: {
-      fields,
-      url: safeTopHref(),
-      title: safeTopTitle(),
-      frameUrl: location.href,
-    },
-  }).catch((e) => console.debug("[FormPilot] sendMessage error:", e?.message));
+  send({ type: "FORM_SCANNED", payload: { fields, frameUrl: location.href, isTop: IS_TOP } });
 }
 
-// ─── Message handler ──────────────────────────────────────────────────────────
+function notifyContext() {
+  if (!IS_TOP) return;
+  send({ type: "PAGE_CONTEXT", payload: { context: extractPageContext(), isTop: true } });
+}
+
+// ─── Messages from the background / side panel ───────────────────────────────
 
 chrome.runtime.onMessage.addListener((message: ExtMessage, _sender, sendResponse) => {
   switch (message.type) {
     case "SCAN_FORM": {
-      const fields = doScan();
-      console.debug(`[FormPilot] Manual scan: ${fields.length} fields in ${location.href}`);
+      const fields = scanForms();
       sendResponse({ fields, frameUrl: location.href });
-      notifyBackground(fields);
-      break;
+      notifyFields(fields);
+      notifyContext();
+      return false;
     }
+    case "GET_PAGE_CONTEXT":
+      sendResponse(IS_TOP ? { context: extractPageContext() } : {});
+      return false;
 
     case "FIELDS_ANALYZED": {
       const { results } = message.payload as { results: FieldResult[] };
-      currentResults = results;
       highlightFields(results);
       sendResponse({ ok: true });
-      break;
+      return false;
     }
-
     case "FILL_FORM": {
-      const { results } = message.payload as { results: FieldResult[] };
-      // Re-tag current DOM elements before filling — handles SPA re-renders
-      // where original data-fp-id attributes may have been wiped by React/Vue
-      scanForms();
-      const stats = fillAllFields(results);
-      sendResponse({ stats });
-      break;
+      const { items } = message.payload as { items: FillItem[] };
+      sendResponse({ stats: fillItems(items) });
+      return false;
     }
-
+    case "UNDO_FILL": {
+      const { fieldIds } = (message.payload ?? {}) as { fieldIds?: string[] };
+      sendResponse({ undone: undoFill(fieldIds), remaining: undoCount() });
+      return false;
+    }
     case "CLICK_FILE_INPUT": {
       const { fieldId } = message.payload as { fieldId: string };
-      // Find by fp-id first, then any file input
-      let el = document.querySelector<HTMLElement>(`[data-fp-id="${fieldId}"]`);
-      if (!el) el = document.querySelector<HTMLElement>('input[type="file"]');
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        setTimeout(() => (el as HTMLInputElement).click(), 300);
-        sendResponse({ ok: true });
-      } else {
-        sendResponse({ ok: false, error: "file input not found" });
-      }
-      break;
+      const el = findByFpId(fieldId) ?? document.querySelector<HTMLElement>('input[type="file"]');
+      if (!el) { sendResponse({ ok: false }); return false; }
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setTimeout(() => (el as HTMLInputElement).click(), 300);
+      sendResponse({ ok: true });
+      return false;
     }
-
     case "SCROLL_TO_FIELD": {
       const { fieldId } = message.payload as { fieldId: string };
-      const el = document.querySelector<HTMLElement>(`[data-fp-id="${fieldId}"]`);
+      const el = findByFpId(fieldId);
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.style.outline = "3px solid #4f6ef7";
-        el.style.outlineOffset = "3px";
-        setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 2000);
+        pulse(el, "#4f6ef7", 4);
       }
       sendResponse({ ok: !!el });
-      break;
+      return false;
     }
-
     case "HIGHLIGHT_UPLOAD_AREA": {
       const { fieldId } = message.payload as { fieldId: string };
-      // Find the file input, then walk up to find the visible clickable upload container
-      let fileEl = document.querySelector<HTMLElement>(`[data-fp-id="${fieldId}"]`)
-        || document.querySelector<HTMLElement>('input[type="file"]');
-
-      // Find the best visible ancestor/sibling to highlight (the custom upload button)
-      let highlightEl: HTMLElement | null = fileEl;
+      const fileEl = findByFpId(fieldId) ?? document.querySelector<HTMLElement>('input[type="file"]');
+      let target: HTMLElement | null = fileEl;
       if (fileEl) {
-        // Walk up to find a container that has some visible area (> 40px tall)
+        // the visible clickable part of a custom upload widget
         let anc: HTMLElement | null = fileEl.parentElement;
         while (anc && anc.tagName !== "BODY") {
-          const rect = anc.getBoundingClientRect();
-          if (rect.height > 40 && rect.width > 40) { highlightEl = anc; break; }
+          const r = anc.getBoundingClientRect();
+          if (r.height > 40 && r.width > 40) { target = anc; break; }
           anc = anc.parentElement;
         }
-        // Also look for a nearby <button> or <label> that is the visual trigger
-        const trigger = highlightEl?.querySelector<HTMLElement>("button, label, [role='button']");
-        if (trigger) highlightEl = trigger;
+        target = target?.querySelector<HTMLElement>("button, label, [role='button']") ?? target;
       }
-
-      if (highlightEl) {
-        highlightEl.scrollIntoView({ behavior: "smooth", block: "center" });
-        const savedOutline = highlightEl.style.outline;
-        const savedOffset = highlightEl.style.outlineOffset;
-        let tick = 0;
-        const pulse = setInterval(() => {
-          if (!highlightEl) { clearInterval(pulse); return; }
-          highlightEl.style.outline = tick % 2 === 0 ? "3px solid #6366f1" : "3px solid #a855f7";
-          highlightEl.style.outlineOffset = "4px";
-          if (++tick > 7) {
-            clearInterval(pulse);
-            setTimeout(() => {
-              if (highlightEl) {
-                highlightEl.style.outline = savedOutline;
-                highlightEl.style.outlineOffset = savedOffset;
-              }
-            }, 600);
-          }
-        }, 350);
-      }
-      sendResponse({ ok: !!highlightEl });
-      break;
+      if (target) { target.scrollIntoView({ behavior: "smooth", block: "center" }); pulse(target, "#6366f1", 8); }
+      sendResponse({ ok: !!target });
+      return false;
     }
-
+    case "ATTACH_FILE": {
+      const { fieldId, name, mime, base64 } = message.payload as { fieldId: string; name: string; mime: string; base64: string };
+      const el = findByFpId(fieldId) as HTMLInputElement | null;
+      if (!el || el.type !== "file") { sendResponse({ ok: false, reason: "not-found" }); return false; }
+      try {
+        const bin = atob(base64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const dt = new DataTransfer();
+        dt.items.add(new File([bytes], name, { type: mime }));
+        el.files = dt.files;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        sendResponse({ ok: el.files.length === 1 });
+      } catch {
+        sendResponse({ ok: false, reason: "blocked" });
+      }
+      return false;
+    }
+    case "SETTINGS_CHANGED":
+      sendResponse({ ok: true });
+      return false;
     default:
-      sendResponse({ error: "unknown" });
+      return false;
   }
-
-  return true;
 });
+
+function pulse(el: HTMLElement, color: string, ticks: number) {
+  const prev = { o: el.style.outline, off: el.style.outlineOffset };
+  let i = 0;
+  const t = setInterval(() => {
+    el.style.outline = i % 2 === 0 ? `3px solid ${color}` : "3px solid #a855f7";
+    el.style.outlineOffset = "4px";
+    if (++i > ticks) { clearInterval(t); setTimeout(() => { el.style.outline = prev.o; el.style.outlineOffset = prev.off; }, 500); }
+  }, 350);
+}
+
+// ─── Detect submission (only after FormPilot filled something) ───────────────
+
+const SUBMIT_TEXT = /^(submit|apply|send|submit application|send application|apply now|finish|complete application)\b/i;
+function reportSubmit() { if (undoCount() > 0) send({ type: "FORM_SUBMITTED", payload: { frameUrl: location.href } }); }
+
+document.addEventListener("submit", reportSubmit, true);
+document.addEventListener("click", (e) => {
+  const t = (e.target as HTMLElement | null)?.closest?.("button,[type=submit],[role=button],input[type=button]") as HTMLElement | null;
+  const label = (t?.innerText || (t as HTMLInputElement | null)?.value || "").trim();
+  if (t && SUBMIT_TEXT.test(label)) reportSubmit();
+}, true);
+
+// ─── Quick-copy hotkeys (configured in Settings → Keyboard shortcuts) ─────────────────
+
+let hotkeys: Record<string, string> = {};   // combo → profile key
+let hotProfile = normalizeProfile(null);
+
+function loadHotkeys() {
+  try {
+    chrome.storage.local.get(["fp_settings", "profile"], (r) => {
+      const sc = (r.fp_settings?.shortcuts ?? {}) as Record<string, string>; // key → combo
+      hotkeys = Object.fromEntries(Object.entries(sc).filter(([, c]) => c).map(([k, c]) => [c, k]));
+      hotProfile = normalizeProfile(r.profile);
+    });
+  } catch { /* extension context invalidated */ }
+}
+loadHotkeys();
+try { chrome.storage.onChanged.addListener(loadHotkeys); } catch { /* ignore */ }
+
+document.addEventListener("keydown", (e) => {
+  if (!e.altKey && !e.ctrlKey && !e.metaKey) return;
+  const key = hotkeys[comboOf(e)];
+  if (!key) return;
+  const value = quickValue(hotProfile, key);
+  if (!value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const el = document.activeElement as HTMLElement | null;
+  const editable = el && (el.matches("input:not([type=checkbox]):not([type=radio]):not([type=file]),textarea,[contenteditable=true]"));
+  if (editable) {
+    if (!el.dataset.fpId) el.dataset.fpId = `fp_hot_${Date.now().toString(36)}`;
+    fillItems([{ fieldId: el.dataset.fpId, value }]);
+  } else {
+    navigator.clipboard?.writeText(value).catch(() => {
+      const ta = document.createElement("textarea");
+      ta.value = value; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+    });
+  }
+}, true);
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 (function init() {
   if (shouldSkipFrame()) return;
+  const run = () => { notifyFields(scanForms()); notifyContext(); };
 
-  function runScan(label: string) {
-    const fields = doScan();
-    console.debug(`[FormPilot] Auto-scan (${label}): ${fields.length} fields found in ${location.href}`);
-    notifyBackground(fields);
-  }
+  if (document.readyState === "complete" || document.readyState === "interactive") run();
+  else document.addEventListener("DOMContentLoaded", run);
+  // many ATS pages render the form after load
+  setTimeout(run, 1500);
+  setTimeout(run, 4000);
 
-  if (document.readyState === "complete" || document.readyState === "interactive") {
-    runScan("immediate");
-    setTimeout(() => runScan("1.5s"), 1500);
-    setTimeout(() => runScan("4s"), 4000);
-  } else {
-    document.addEventListener("DOMContentLoaded", () => {
-      runScan("DOMContentLoaded");
-      setTimeout(() => runScan("DOMContentLoaded+1.5s"), 1500);
-    });
-  }
+  watchForNewFields(notifyFields);
 
-  observer = watchForNewFields((fields) => {
-    console.debug(`[FormPilot] MutationObserver: ${fields.length} fields in ${location.href}`);
-    notifyBackground(fields);
-  });
+  // SPA navigation: let the background reset state and rescan
+  let lastPath = location.pathname + location.search;
+  setInterval(() => {
+    const p = location.pathname + location.search;
+    if (p !== lastPath) { lastPath = p; clearHighlights(); setTimeout(run, 800); }
+  }, 1000);
 })();

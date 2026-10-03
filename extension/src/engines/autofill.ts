@@ -1,266 +1,275 @@
-import { FieldResult, NormalizedField } from "../shared/types";
+// Filling (and un-filling) fields. Works with React/Vue/Angular controlled inputs and shadow DOM.
 
-// ─── Native value setter (React / Vue / Angular compatible) ──────────────────
+import { FieldResult, FillStats, NormalizedField } from "../shared/types";
+import { deepQuery, deepQueryAll, findByFpId } from "./formScanner";
+import { cssEscape } from "./dom";
+import { normalize } from "./text";
 
-function nativeSet(el: HTMLElement, value: string) {
-  const tag = el.tagName.toLowerCase();
-  if (tag === "input") {
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-    if (setter) { setter.call(el, value); return; }
-  }
-  if (tag === "textarea") {
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-    if (setter) { setter.call(el, value); return; }
-  }
-  (el as HTMLInputElement).value = value;
+export interface FillItem {
+  fieldId: string;
+  value: string;
+  field?: NormalizedField; // used to re-find the element if the page re-rendered and dropped data-fp-id
 }
 
-// Dispatch the full event sequence React/Angular/Vue listen to
-function triggerEvents(el: HTMLElement, value = "") {
+// ─── Native value setters (frameworks track the property descriptor, not the attribute) ──────
+
+function nativeSet(el: HTMLElement, value: string) {
+  const proto =
+    el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
+    : el instanceof HTMLSelectElement ? HTMLSelectElement.prototype
+    : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+  if (setter) setter.call(el, value);
+  else (el as HTMLInputElement).value = value;
+}
+
+function fire(el: HTMLElement, value = "") {
   el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-  el.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
-  // InputEvent (not generic Event) — React 17+ uses InputEvent internally
-  el.dispatchEvent(new InputEvent("input", {
-    bubbles: true,
-    cancelable: true,
-    data: value || null,
-    inputType: "insertText",
-  }));
+  el.dispatchEvent(new FocusEvent("focus"));
+  el.dispatchEvent(new InputEvent("input", { bubbles: true, cancelable: true, data: value || null, inputType: "insertText" }));
   el.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
-  el.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+  el.dispatchEvent(new FocusEvent("blur"));
   el.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
 }
 
-function fillTextField(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
+// ─── Snapshots for undo ────────────────────────────────────────────────────────
+
+type Snapshot =
+  | { kind: "text"; value: string }
+  | { kind: "editable"; value: string }
+  | { kind: "select"; value: string }
+  | { kind: "checkbox"; checked: boolean }
+  | { kind: "radio"; name: string; checkedValue: string | null };
+
+const undoStack = new Map<string, Snapshot>();
+
+function rootOf(el: Element): Document | ShadowRoot { return el.getRootNode() as Document | ShadowRoot; }
+function radiosOf(el: HTMLInputElement): HTMLInputElement[] {
+  return el.name ? Array.from(rootOf(el).querySelectorAll<HTMLInputElement>(`input[type="radio"][name="${cssEscape(el.name)}"]`)) : [el];
+}
+
+function snapshot(el: HTMLElement): Snapshot | null {
+  const tag = el.tagName.toLowerCase();
+  const type = (el as HTMLInputElement).type?.toLowerCase();
+  if (tag === "select") return { kind: "select", value: (el as HTMLSelectElement).value };
+  if (type === "checkbox") return { kind: "checkbox", checked: (el as HTMLInputElement).checked };
+  if (type === "radio") {
+    const checked = radiosOf(el as HTMLInputElement).find((r) => r.checked);
+    return { kind: "radio", name: (el as HTMLInputElement).name, checkedValue: checked ? checked.value : null };
+  }
+  if (tag === "input" || tag === "textarea") return { kind: "text", value: (el as HTMLInputElement).value };
+  if (el.getAttribute("contenteditable") === "true" || el.getAttribute("role") === "textbox") return { kind: "editable", value: el.innerText };
+  return null;
+}
+
+function restore(el: HTMLElement, s: Snapshot) {
+  switch (s.kind) {
+    case "text": nativeSet(el, s.value); fire(el, s.value); break;
+    case "select": nativeSet(el, s.value); fire(el, s.value); break;
+    case "editable": el.innerText = s.value; fire(el, s.value); break;
+    case "checkbox": if ((el as HTMLInputElement).checked !== s.checked) { (el as HTMLInputElement).click(); } break;
+    case "radio": {
+      const radios = radiosOf(el as HTMLInputElement);
+      if (s.checkedValue === null) { radios.forEach((r) => { r.checked = false; }); fire(el); }
+      else radios.find((r) => r.value === s.checkedValue)?.click();
+      break;
+    }
+  }
+}
+
+// ─── Per-type fillers ─────────────────────────────────────────────────────────────
+
+function fillText(el: HTMLInputElement | HTMLTextAreaElement, value: string): boolean {
   el.focus();
-  el.click();
-  // Clear first so React re-fires
   nativeSet(el, "");
   el.dispatchEvent(new InputEvent("input", { bubbles: true, cancelable: true, inputType: "deleteContentBackward" }));
-  // Set actual value
   nativeSet(el, value);
-  triggerEvents(el, value);
+  fire(el, value);
+  return true;
 }
 
-function fillSelect(el: HTMLSelectElement, value: string) {
-  const lower = value.toLowerCase().trim();
-  let matched = false;
-
-  // 1. exact value
-  for (const opt of Array.from(el.options)) {
-    if (opt.value === value) { el.value = opt.value; matched = true; break; }
-  }
-  // 2. exact label
-  if (!matched) {
-    for (const opt of Array.from(el.options)) {
-      if (opt.text.trim().toLowerCase() === lower) { el.value = opt.value; matched = true; break; }
-    }
-  }
-  // 3. starts-with label match
-  if (!matched) {
-    for (const opt of Array.from(el.options)) {
-      const t = opt.text.trim().toLowerCase();
-      if (t.startsWith(lower) || lower.startsWith(t)) { el.value = opt.value; matched = true; break; }
-    }
-  }
-  // 4. partial containment
-  if (!matched) {
-    for (const opt of Array.from(el.options)) {
-      const t = opt.text.trim().toLowerCase();
-      if (t.includes(lower) || lower.includes(t)) { el.value = opt.value; matched = true; break; }
-    }
-  }
-  if (matched) triggerEvents(el, value);
-  return matched;
+function fillSelect(el: HTMLSelectElement, value: string): boolean {
+  const want = value.trim().toLowerCase();
+  const opts = Array.from(el.options);
+  const hit =
+    opts.find((o) => o.value === value) ??
+    opts.find((o) => o.text.trim().toLowerCase() === want) ??
+    opts.find((o) => o.value && o.text.trim().toLowerCase().startsWith(want)) ??
+    opts.find((o) => o.value && want.length > 2 && o.text.trim().toLowerCase().includes(want));
+  if (!hit) return false;
+  nativeSet(el, hit.value);
+  fire(el, hit.value);
+  return true;
 }
 
-function fillRadio(name: string, value: string) {
-  const lower = value.toLowerCase();
-  const radios = document.querySelectorAll<HTMLInputElement>(`input[type="radio"][name="${CSS.escape(name)}"]`);
-  for (const radio of Array.from(radios)) {
-    const labelEl = document.querySelector<HTMLLabelElement>(`label[for="${radio.id}"]`);
-    const labelText = (labelEl?.innerText || radio.value).toLowerCase();
-    if (radio.value.toLowerCase() === lower || labelText === lower) {
-      radio.click();
-      triggerEvents(radio);
-      return true;
-    }
+function labelTextOf(radio: HTMLInputElement): string {
+  const root = rootOf(radio);
+  const l = radio.id ? root.querySelector<HTMLLabelElement>(`label[for="${cssEscape(radio.id)}"]`) : radio.closest("label");
+  return (l?.textContent ?? radio.value).trim().toLowerCase();
+}
+
+function fillRadio(el: HTMLInputElement, value: string): boolean {
+  const want = value.trim().toLowerCase();
+  const radios = radiosOf(el);
+  const hit = radios.find((r) => r.value.toLowerCase() === want) ?? radios.find((r) => labelTextOf(r) === want) ??
+    radios.find((r) => normalize(labelTextOf(r)) === normalize(want));
+  if (!hit) return false;
+  if (!hit.checked) hit.click();
+  fire(hit);
+  return true;
+}
+
+function fillCheckbox(el: HTMLInputElement, value: string): boolean {
+  const shouldCheck = ["true", "yes", "1", "on", "checked", "y"].includes(value.trim().toLowerCase());
+  if (el.checked !== shouldCheck) el.click();
+  return true;
+}
+
+function fillEditable(el: HTMLElement, value: string): boolean {
+  el.focus();
+  el.innerText = value;
+  fire(el, value);
+  return true;
+}
+
+// Returns whether the value was applied.
+function fillElement(el: HTMLElement, value: string): boolean {
+  const tag = el.tagName.toLowerCase();
+  const type = (el as HTMLInputElement).type?.toLowerCase() || "";
+  try {
+    if (tag === "select") return fillSelect(el as HTMLSelectElement, value);
+    if (type === "radio") return fillRadio(el as HTMLInputElement, value);
+    if (type === "checkbox") return fillCheckbox(el as HTMLInputElement, value);
+    if (type === "file") return false; // files are chosen by the user (browsers forbid scripted file selection)
+    if (tag === "input" || tag === "textarea") return fillText(el as HTMLInputElement | HTMLTextAreaElement, value);
+    if (el.getAttribute("contenteditable") === "true" || el.getAttribute("role") === "textbox") return fillEditable(el, value);
+  } catch (e) {
+    console.debug("[FormPilot] fill error", e);
   }
   return false;
 }
 
-function fillCheckbox(el: HTMLInputElement, value: string) {
-  const shouldCheck = ["true", "yes", "1", "on", "checked", "agree", "accept"].includes(value.toLowerCase());
-  if (el.checked !== shouldCheck) {
-    el.click();
-    triggerEvents(el);
-  }
-  return true;
-}
+// ─── Highlights ───────────────────────────────────────────────────────────────────
 
-function flashHighlight(el: HTMLElement) {
-  const prev = el.style.outline;
-  const prevOffset = el.style.outlineOffset;
-  el.style.outline = "2px solid #4f6ef7";
-  el.style.outlineOffset = "2px";
-  setTimeout(() => { el.style.outline = prev; el.style.outlineOffset = prevOffset; }, 2500);
-}
+const OUTLINE_KEY = "fpPrevOutline";
 
-// ─── Core fill logic ──────────────────────────────────────────────────────────
-
-function fillElement(el: HTMLElement, value: string): boolean {
-  const tag = el.tagName.toLowerCase();
-  const type = (el as HTMLInputElement).type?.toLowerCase() || "";
-  const name = (el as HTMLInputElement).name || "";
-
-  try {
-    let ok = false;
-    if (tag === "select") {
-      ok = fillSelect(el as HTMLSelectElement, value);
-    } else if (type === "radio") {
-      ok = fillRadio(name, value);
-    } else if (type === "checkbox") {
-      ok = fillCheckbox(el as HTMLInputElement, value);
-    } else if (tag === "input" || tag === "textarea") {
-      fillTextField(el as HTMLInputElement | HTMLTextAreaElement, value);
-      ok = true;
-    } else if (el.getAttribute("contenteditable") === "true" || el.getAttribute("role") === "textbox") {
-      el.focus();
-      el.click();
-      el.innerText = value;
-      triggerEvents(el, value);
-      ok = true;
+function setOutline(el: HTMLElement, css: string | null, style: "solid" | "dashed" = "solid") {
+  if (css === null) {
+    if (el.dataset[OUTLINE_KEY] !== undefined) {
+      el.style.removeProperty("outline"); el.style.removeProperty("outline-offset");
+      if (el.dataset[OUTLINE_KEY]) el.style.outline = el.dataset[OUTLINE_KEY]!;
+      delete el.dataset[OUTLINE_KEY];
     }
-    if (ok) flashHighlight(el);
-    return ok;
-  } catch {
-    return false;
+    return;
   }
+  if (el.dataset[OUTLINE_KEY] === undefined) el.dataset[OUTLINE_KEY] = el.style.outline;
+  el.style.setProperty("outline", `2px ${style} ${css}`, "important");
+  el.style.setProperty("outline-offset", "2px", "important");
 }
 
-// ─── Element finder — 6 strategies, most robust to least ─────────────────────
-
-function normalizeLabel(s: string): string {
-  return s.toLowerCase().replace(/[*\s()\[\]]+/g, " ").trim();
+function flash(el: HTMLElement, color = "#4f6ef7", ms = 2200) {
+  setOutline(el, color);
+  setTimeout(() => setOutline(el, null), ms);
 }
 
-function findElement(result: FieldResult): HTMLElement | null {
-  const f = result.normalizedField;
+// ─── Element lookup ───────────────────────────────────────────────────────────────
 
-  // Strategy 1 — data-fp-id (set during scan, may be gone after React re-render)
-  if (f.id) {
-    const el = document.querySelector<HTMLElement>(`[data-fp-id="${f.id}"]`);
-    if (el) return el;
-  }
+function normLabel(s: string) { return s.toLowerCase().replace(/[*\s()[\]]+/g, " ").trim(); }
 
-  // Strategy 2 — DOM element id
-  if (f.elementId && f.elementId !== f.id) {
-    const el = document.getElementById(f.elementId);
-    if (el) return el;
-  }
+export function findElement(fieldId: string, f?: NormalizedField): HTMLElement | null {
+  const byId = findByFpId(fieldId);
+  if (byId) return byId;
+  if (!f) return null;
 
-  // Strategy 3 — name attribute
-  if (f.name) {
-    const el = document.querySelector<HTMLElement>(`[name="${CSS.escape(f.name)}"]`);
-    if (el) return el;
-  }
-
-  // Strategy 4 — aria-label
-  if (f.ariaLabel) {
-    const el = document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(f.ariaLabel)}"]`);
-    if (el) return el;
-  }
-
-  // Strategy 5 — placeholder text
-  if (f.placeholder) {
-    const el = document.querySelector<HTMLElement>(`[placeholder="${CSS.escape(f.placeholder)}"]`);
-    if (el) return el;
-  }
-
-  // Strategy 6 — label text → input association (handles React re-renders best)
-  if (f.label) {
-    const target = normalizeLabel(f.label);
-    const allLabels = Array.from(document.querySelectorAll<HTMLLabelElement>("label"));
-    for (const lbl of allLabels) {
-      const lblNorm = normalizeLabel(lbl.innerText);
-      if (lblNorm === target || lblNorm.startsWith(target) || target.startsWith(lblNorm)) {
-        // Try for="id" linkage
+  // The page re-rendered and dropped our marker. Re-find by other signals, and re-tag.
+  const attempts: (() => HTMLElement | null)[] = [
+    () => (f.elementId && f.elementId !== f.id ? deepQuery(`#${cssEscape(f.elementId)}`) : null),
+    () => (f.name ? deepQuery(`[name="${cssEscape(f.name)}"]`) : null),
+    () => (f.ariaLabel ? deepQuery(`[aria-label="${cssEscape(f.ariaLabel)}"]`) : null),
+    () => (f.placeholder ? deepQuery(`[placeholder="${cssEscape(f.placeholder)}"]`) : null),
+    () => {
+      if (!f.label) return null;
+      const target = normLabel(f.label);
+      for (const lbl of deepQueryAll<HTMLLabelElement>("label")) {
+        const n = normLabel(lbl.textContent ?? "");
+        if (n !== target && !n.startsWith(target) && !target.startsWith(n)) continue;
         const forId = lbl.getAttribute("for");
-        if (forId) {
-          const el = document.getElementById(forId);
-          if (el) return el;
-        }
-        // Try child input/select/textarea
-        const child = lbl.querySelector<HTMLElement>("input:not([type=hidden]), select, textarea");
-        if (child) return child;
-        // Try next sibling inputs
-        let sib = lbl.nextElementSibling as HTMLElement | null;
-        while (sib) {
-          if (sib.matches("input:not([type=hidden]), select, textarea")) return sib;
-          const inner = sib.querySelector<HTMLElement>("input:not([type=hidden]), select, textarea");
-          if (inner) return inner;
-          sib = sib.nextElementSibling as HTMLElement | null;
-        }
+        const root = rootOf(lbl);
+        const c = (forId && root.querySelector<HTMLElement>(`#${cssEscape(forId)}`)) || lbl.querySelector<HTMLElement>("input:not([type=hidden]),select,textarea");
+        if (c) return c;
       }
-    }
+      return null;
+    },
+  ];
+  for (const a of attempts) {
+    const el = a();
+    if (el) { el.dataset.fpId = fieldId; return el; }
   }
-
   return null;
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ─── Public API ───────────────────────────────────────────────────────────────────
 
-export function fillField(fieldId: string, value: string): boolean {
-  const el = document.querySelector<HTMLElement>(`[data-fp-id="${fieldId}"]`);
-  if (!el) return false;
-  return fillElement(el, value);
-}
-
-export function fillAllFields(results: FieldResult[]): { success: number; failed: number; skipped: number } {
-  let success = 0, failed = 0, skipped = 0;
-
-  for (const result of results) {
-    if (
-      result.status === "skipped" ||
-      result.status === "needs_input" ||
-      result.status === "sensitive" ||
-      result.status === "document"
-    ) { skipped++; continue; }
-
-    if (!result.value) { skipped++; continue; }
-
-    const el = findElement(result);
-    if (!el) {
-      console.debug(`[FormPilot] Not found: "${result.normalizedField.label}" (id=${result.fieldId})`);
-      failed++;
-      continue;
-    }
-
-    const ok = fillElement(el, result.value);
-    if (ok) {
-      success++;
-      console.debug(`[FormPilot] Filled "${result.normalizedField.label}" → "${result.value.slice(0, 40)}"`);
+export function fillItems(items: FillItem[]): FillStats {
+  const stats: FillStats = { success: 0, failed: 0, skipped: 0, filled: [] };
+  for (const item of items) {
+    if (!item.value) { stats.skipped++; continue; }
+    const el = findElement(item.fieldId, item.field);
+    if (!el) { stats.failed++; continue; }
+    const before = undoStack.has(item.fieldId) ? null : snapshot(el);
+    if (fillElement(el, item.value)) {
+      if (before) undoStack.set(item.fieldId, before);
+      flash(el);
+      stats.success++;
+      stats.filled.push(item.fieldId);
     } else {
-      failed++;
-      console.debug(`[FormPilot] Fill failed: "${result.normalizedField.label}"`);
+      stats.failed++;
     }
   }
+  return stats;
+}
 
-  console.debug(`[FormPilot] Fill: ${success} filled, ${failed} failed, ${skipped} skipped`);
-  return { success, failed, skipped };
+export function fillField(fieldId: string, value: string): boolean {
+  return fillItems([{ fieldId, value }]).success === 1;
+}
+
+/** Restore original values. No ids → undo everything FormPilot filled on this page. */
+export function undoFill(fieldIds?: string[]): number {
+  const all = !fieldIds?.length;
+  const ids = all ? Array.from(undoStack.keys()) : fieldIds!;
+  let n = 0;
+  for (const id of ids) {
+    const snap = undoStack.get(id);
+    const el = findByFpId(id);
+    if (!snap || !el) { if (all) undoStack.delete(id); continue; }
+    restore(el, snap);
+    undoStack.delete(id);
+    flash(el, "#f59e0b", 1200);
+    n++;
+  }
+  return n;
+}
+
+// Entries for fields the page has since removed can never be undone — drop them.
+export function undoCount(): number {
+  for (const id of Array.from(undoStack.keys())) if (!findByFpId(id)) undoStack.delete(id);
+  return undoStack.size;
 }
 
 export function highlightFields(results: FieldResult[]) {
-  for (const result of results) {
-    const el = findElement(result);
-    if (!el) continue;
-    el.style.outline = "";
-    if (result.status === "needs_input" || result.status === "sensitive") {
-      el.style.outline = "2px solid #f59e0b";
-      el.style.outlineOffset = "2px";
-    } else if (result.status === "document") {
-      el.style.outline = "2px solid #8b5cf6";
-      el.style.outlineOffset = "2px";
+  for (const r of results) {
+    const el = findElement(r.fieldId, r.normalizedField);
+    if (!el || undoStack.has(r.fieldId)) continue; // don't repaint fields we just filled
+    switch (r.status) {
+      case "needs_input": case "sensitive": setOutline(el, "#f59e0b"); break;
+      case "document": setOutline(el, "#8b5cf6"); break;
+      case "review": setOutline(el, "#f59e0b", "dashed"); break;
+      case "ai": case "memory": setOutline(el, "#4f6ef7", "dashed"); break;
+      default: setOutline(el, null);
     }
   }
+}
+
+export function clearHighlights() {
+  for (const el of deepQueryAll<HTMLElement>("[data-fp-id]")) setOutline(el, null);
 }

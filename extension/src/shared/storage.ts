@@ -1,172 +1,137 @@
-// Shared local storage helpers — documents + application history
+// chrome.storage helpers: extension settings + one-time migration from the pre-0.2 storage layout.
+// Documents, applications and answers now live in the local API (SQLite).
 
-export interface StoredDocument {
-  id: string;
-  name: string;
-  category: "resume" | "cover_letter" | "certificate" | "transcript" | "id" | "other";
-  filename: string;
-  size: number;
-  mimeType: string;
-  uploadedAt: string;
-  tags: string[];
-  data: string; // base64
+import { api } from "./api";
+
+const get = <T,>(key: string, fallback: T): Promise<T> =>
+  new Promise((resolve) => chrome.storage.local.get(key, (res) => resolve((res[key] as T) ?? fallback)));
+const set = (obj: Record<string, unknown>): Promise<void> => new Promise((resolve) => chrome.storage.local.set(obj, resolve));
+
+// ─── Settings ──────────────────────────────────────────────────────────────────────
+
+export type Theme = "system" | "light" | "dark";
+
+export interface AppSettings {
+  highlightFields: boolean;
+  showConfidence: boolean;
+  autoThreshold: number;       // >= → fill automatically
+  reviewThreshold: number;     // >= → fill but highlight for review; below → never auto-filled
+  autoFillHigh: boolean;
+  reviewMedium: boolean;
+  autoFillOnDetect: boolean;   // fill high-confidence fields as soon as a form is detected
+  theme: Theme;
+  shortcuts: Record<string, string>;   // quick-copy hotkeys, e.g. { email: "Alt+Shift+E" }
+  quickCopyFields: string[];           // which fields appear in Quick Copy
+  onboardingComplete: boolean;
+  debug: boolean;
 }
 
-const DOCS_KEY = "fp_documents";
+export const DEFAULT_SETTINGS: AppSettings = {
+  highlightFields: true,
+  showConfidence: true,
+  autoThreshold: 0.9,
+  reviewThreshold: 0.7,
+  autoFillHigh: true,
+  reviewMedium: true,
+  autoFillOnDetect: false,
+  theme: "system",
+  shortcuts: {},
+  quickCopyFields: ["email", "phone", "address", "linkedin", "github", "portfolio", "currentCompany", "expectedSalary", "noticePeriod"],
+  onboardingComplete: false,
+  debug: false,
+};
 
-export async function getDocuments(): Promise<StoredDocument[]> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(DOCS_KEY, (res) => {
-      resolve(res[DOCS_KEY] ?? []);
-    });
-  });
+const SETTINGS_KEY = "fp_settings";
+
+export function normalizeSettings(s: Partial<AppSettings> | undefined): AppSettings {
+  const m = { ...DEFAULT_SETTINGS, ...(s ?? {}) };
+  const review = Math.min(0.95, Math.max(0.3, Number(m.reviewThreshold) || DEFAULT_SETTINGS.reviewThreshold));
+  const auto = Math.min(1, Math.max(review, Number(m.autoThreshold) || DEFAULT_SETTINGS.autoThreshold));
+  return { ...m, autoThreshold: auto, reviewThreshold: review, shortcuts: m.shortcuts ?? {}, quickCopyFields: m.quickCopyFields ?? DEFAULT_SETTINGS.quickCopyFields };
 }
 
-export async function getDocument(id: string): Promise<StoredDocument | null> {
-  const docs = await getDocuments();
-  return docs.find((d) => d.id === id) ?? null;
+export async function getSettings(): Promise<AppSettings> {
+  return normalizeSettings(await get<Partial<AppSettings>>(SETTINGS_KEY, {}));
 }
 
-export async function saveDocument(doc: StoredDocument): Promise<void> {
-  const docs = await getDocuments();
-  const idx = docs.findIndex((d) => d.id === doc.id);
-  if (idx >= 0) docs[idx] = doc;
-  else docs.push(doc);
-  return new Promise((resolve) => chrome.storage.local.set({ [DOCS_KEY]: docs }, resolve));
+export async function saveSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+  const next = normalizeSettings({ ...(await getSettings()), ...patch });
+  await set({ [SETTINGS_KEY]: next });
+  return next;
 }
 
-export async function deleteDocument(id: string): Promise<void> {
-  const docs = await getDocuments();
-  return new Promise((resolve) =>
-    chrome.storage.local.set({ [DOCS_KEY]: docs.filter((d) => d.id !== id) }, resolve)
-  );
+export function onSettingsChanged(cb: (s: AppSettings) => void): () => void {
+  const l = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+    if (area === "local" && changes[SETTINGS_KEY]) cb(normalizeSettings(changes[SETTINGS_KEY].newValue));
+  };
+  chrome.storage.onChanged.addListener(l);
+  return () => chrome.storage.onChanged.removeListener(l);
 }
 
-// Read a File object into base64
-export function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      // strip "data:...;base64," prefix
-      resolve(result.split(",")[1] ?? result);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-// Create an object URL from base64 for download/preview
-export function base64ToObjectUrl(data: string, mimeType: string): string {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const blob = new Blob([bytes], { type: mimeType });
-  return URL.createObjectURL(blob);
-}
-
-// Recommend best resume for a given context (job title / page text)
-export function recommendResume(docs: StoredDocument[], context: string): StoredDocument | null {
-  const resumes = docs.filter((d) => d.category === "resume");
-  if (!resumes.length) return null;
-  if (!context) return resumes[0];
-
-  const ctxLower = context.toLowerCase();
-  const scored = resumes.map((r) => {
-    const score = r.tags.reduce((s, t) => s + (ctxLower.includes(t.toLowerCase()) ? 1 : 0), 0);
-    return { doc: r, score };
-  });
-  scored.sort((a, b) => b.score - a.score);
-  return scored[0].doc;
-}
-
-// ─── Application History ──────────────────────────────────────────────────────
-
-export interface ApplicationRecord {
-  id: string;
-  company: string;
-  role: string;
-  url: string;
-  domain: string;
-  date: string;
-  status: "applied" | "interviewing" | "offer" | "rejected";
-  fieldsCount: number;
-  notes?: string;
-}
-
-const HISTORY_KEY = "fp_history";
-
-export async function getHistory(): Promise<ApplicationRecord[]> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(HISTORY_KEY, (res) => resolve(res[HISTORY_KEY] ?? []));
-  });
-}
-
-export async function saveApplicationRecord(record: ApplicationRecord): Promise<void> {
-  const history = await getHistory();
-  // Deduplicate: same URL within the last hour → update instead of new entry
-  const oneHourAgo = Date.now() - 60 * 60 * 1000;
-  const recentIdx = history.findIndex(
-    (r) => r.url === record.url && new Date(r.date).getTime() > oneHourAgo
-  );
-  if (recentIdx >= 0) {
-    history[recentIdx] = { ...history[recentIdx], fieldsCount: record.fieldsCount, date: record.date };
-  } else {
-    history.unshift(record);
-  }
-  return new Promise((resolve) =>
-    chrome.storage.local.set({ [HISTORY_KEY]: history.slice(0, 200) }, resolve)
-  );
-}
-
-export async function updateApplicationRecord(
-  id: string,
-  patch: Partial<Pick<ApplicationRecord, "status" | "notes">>
-): Promise<void> {
-  const history = await getHistory();
-  const idx = history.findIndex((r) => r.id === id);
-  if (idx >= 0) {
-    history[idx] = { ...history[idx], ...patch };
-    return new Promise((resolve) => chrome.storage.local.set({ [HISTORY_KEY]: history }, resolve));
-  }
-}
-
-export async function deleteApplicationRecord(id: string): Promise<void> {
-  const history = await getHistory();
-  return new Promise((resolve) =>
-    chrome.storage.local.set({ [HISTORY_KEY]: history.filter((r) => r.id !== id) }, resolve)
-  );
-}
-
-export async function clearHistory(): Promise<void> {
-  return new Promise((resolve) => chrome.storage.local.set({ [HISTORY_KEY]: [] }, resolve));
+export function applyTheme(theme: Theme) {
+  const root = document.documentElement;
+  if (theme === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", theme);
 }
 
 export async function clearAllData(): Promise<void> {
   return new Promise((resolve) => chrome.storage.local.clear(resolve));
 }
 
-// ─── App Settings ─────────────────────────────────────────────────────────────
+// ─── Legacy (pre-0.2) data ───────────────────────────────────────────────────────────
 
-export interface AppSettings {
-  highlightFields: boolean;
-  showConfidence: boolean;
+interface LegacyDoc { id: string; name: string; category: string; filename: string; mimeType: string; tags: string[]; data: string }
+interface LegacyApp { id: string; company: string; role: string; url: string; date: string; status: string; notes?: string }
+
+const DOCS_KEY = "fp_documents";
+const HISTORY_KEY = "fp_history";
+
+export async function hasLegacyData(): Promise<boolean> {
+  const [d, h] = await Promise.all([get<LegacyDoc[]>(DOCS_KEY, []), get<LegacyApp[]>(HISTORY_KEY, [])]);
+  return d.length > 0 || h.length > 0;
 }
 
-const SETTINGS_KEY = "fp_settings";
-export const DEFAULT_SETTINGS: AppSettings = {
-  highlightFields: true,
-  showConfidence: true,
-};
-
-export async function getSettings(): Promise<AppSettings> {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(SETTINGS_KEY, (res) => {
-      resolve({ ...DEFAULT_SETTINGS, ...(res[SETTINGS_KEY] ?? {}) });
-    });
-  });
+function b64ToFile(d: LegacyDoc): File {
+  const bin = atob(d.data);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new File([bytes], d.filename || `${d.name}.pdf`, { type: d.mimeType || "application/octet-stream" });
 }
 
-export async function saveSettings(settings: AppSettings): Promise<void> {
-  return new Promise((resolve) => chrome.storage.local.set({ [SETTINGS_KEY]: settings }, resolve));
+/**
+ * Move documents / history saved by older versions (or queued while the API was offline) into the
+ * local API. Items are removed from chrome.storage only after the API accepted them.
+ */
+export async function migrateLegacyData(): Promise<{ documents: number; applications: number }> {
+  const out = { documents: 0, applications: 0 };
+  const docs = await get<LegacyDoc[]>(DOCS_KEY, []);
+  const keepDocs: LegacyDoc[] = [];
+  for (const d of docs) {
+    try {
+      const cat = ["resume", "cover_letter", "certificate", "transcript", "id", "other"].includes(d.category) ? d.category : "other";
+      await api.documents.upload(b64ToFile(d), { name: d.name, category: cat, tags: d.tags ?? [], skills: cat === "resume" ? d.tags ?? [] : [] });
+      out.documents++;
+    } catch { keepDocs.push(d); }
+  }
+  await set({ [DOCS_KEY]: keepDocs });
+
+  const hist = await get<LegacyApp[]>(HISTORY_KEY, []);
+  const keepHist: LegacyApp[] = [];
+  const map: Record<string, string> = { applied: "applied", interviewing: "interview", in_progress: "interview", offer: "offer", rejected: "rejected" };
+  for (const h of hist) {
+    try {
+      await api.applications.upsert({ url: h.url || `legacy:${h.id}`, company: h.company, role: h.role, status: (map[h.status] ?? "applied") as never, appliedAt: h.date, notes: h.notes ?? "" });
+      out.applications++;
+    } catch { keepHist.push(h); }
+  }
+  await set({ [HISTORY_KEY]: keepHist });
+  return out;
+}
+
+/** Queue an application locally when the API is offline; migrateLegacyData() uploads it later. */
+export async function queueOfflineApplication(a: { company: string; role: string; url: string; status?: string }): Promise<void> {
+  const hist = await get<LegacyApp[]>(HISTORY_KEY, []);
+  if (hist.some((h) => h.url === a.url)) return;
+  hist.unshift({ id: crypto.randomUUID(), company: a.company, role: a.role, url: a.url, date: new Date().toISOString(), status: a.status ?? "applied" });
+  await set({ [HISTORY_KEY]: hist.slice(0, 200) });
 }

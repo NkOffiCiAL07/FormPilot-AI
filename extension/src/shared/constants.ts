@@ -1,5 +1,7 @@
 // 127.0.0.1 (not "localhost") avoids an IPv6 lookup against a server that only binds IPv4.
-export const LOCAL_API_BASE = "http://127.0.0.1:3710";
+// VITE_FORMPILOT_API lets tests/dev point at another port; the default is what ships.
+export const LOCAL_API_BASE: string =
+  (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_FORMPILOT_API || "http://127.0.0.1:3710";
 
 export const DEFAULT_THRESHOLDS = {
   AUTO: 0.9,     // >= fill automatically

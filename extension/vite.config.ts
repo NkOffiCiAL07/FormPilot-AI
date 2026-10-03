@@ -6,15 +6,17 @@ import { join } from "path";
 
 // Custom plugin to copy manifest + icons to dist after build
 function copyExtensionAssets(): Plugin {
+  let out = "dist";
   return {
     name: "copy-extension-assets",
+    configResolved(cfg) { out = cfg.build.outDir; },
     closeBundle() {
       // manifest
-      copyFileSync("manifest.json", "dist/manifest.json");
+      copyFileSync("manifest.json", join(out, "manifest.json"));
 
       // icons
       const iconsSrc = "public/icons";
-      const iconsDst = "dist/icons";
+      const iconsDst = join(out, "icons");
       if (existsSync(iconsSrc)) {
         mkdirSync(iconsDst, { recursive: true });
         for (const f of readdirSync(iconsSrc)) {
@@ -25,8 +27,21 @@ function copyExtensionAssets(): Plugin {
   };
 }
 
+// Chrome refuses extension scripts containing non-characters (e.g. U+FFFF). Emit ASCII-only output.
+
+// Chrome rejects extension scripts that contain non-characters (e.g. U+FFFF) and can mis-decode other
+// non-ASCII text, so escape everything outside ASCII in the emitted bundles.
+function asciiOnly(): Plugin {
+  return {
+    name: "ascii-only-output",
+    renderChunk(code) {
+      return { code: code.replace(/[^\x00-\x7F]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`), map: null };
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), copyExtensionAssets()],
+  plugins: [react(), copyExtensionAssets(), asciiOnly()],
   build: {
     outDir: "dist",
     emptyOutDir: true,
@@ -35,12 +50,10 @@ export default defineConfig({
         popup: resolve(__dirname, "popup.html"),
         sidepanel: resolve(__dirname, "sidepanel.html"),
         background: resolve(__dirname, "src/background/index.ts"),
-        content: resolve(__dirname, "src/content/index.ts"),
       },
       output: {
         entryFileNames: (chunk) => {
           if (chunk.name === "background") return "src/background/index.js";
-          if (chunk.name === "content") return "src/content/index.js";
           return "assets/[name]-[hash].js";
         },
         chunkFileNames: "assets/[name]-[hash].js",

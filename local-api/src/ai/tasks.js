@@ -26,10 +26,10 @@ async function askJson(provider, prompt, schema, opts = {}) {
 // something to paste into a form — surface it as missing information instead.
 const ADMITS_MISSING = /\b(profile|resume|information|details)\b[^.]{0,40}\b(does not|doesn't|do not|don't|not)\b[^.]{0,30}\b(contain|include|provide|mention|have|specif)|\b(no|not enough|insufficient|lack of) (information|details|data)\b|\bI (do not|don't|cannot|can't) (have|answer|provide)\b/i;
 
-export async function generateAnswers(provider, { questions, profile, resumeText, job, approved }) {
+export async function generateAnswers(provider, { questions, profile, resumeText, job, approved, notes }) {
   const schema = { type: "object", props: { answers: { type: "array", items: { type: "object", props: {
     answer: { type: "string" }, missing: { ...strArr, optional: true } } } } } };
-  const out = await askJson(provider, answersPrompt({ questions, profile, resumeText, job, approved }), schema);
+  const out = await askJson(provider, answersPrompt({ questions, profile, resumeText, job, approved, notes }), schema);
   const injectionSuspected = detectInjection(`${job?.jobDescription || ""} ${job?.pageText || ""}`);
   return questions.map((_, i) => {
     const a = out.answers[i] || { answer: "", missing: [] };

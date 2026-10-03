@@ -234,6 +234,9 @@ export type MessageType =
   | "SCROLL_TO_FIELD"
   | "HIGHLIGHT_UPLOAD_AREA"
   | "GET_PAGE_CONTEXT"
+  | "SET_JOB_TEXT"
+  | "ATTACH_FILE"
+  | "FILE_ATTACH_REQUEST"
   | "SETTINGS_CHANGED";
 
 export interface ExtMessage {
