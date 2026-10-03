@@ -57,7 +57,7 @@ function fromDom(): string {
   ));
   let best = "";
   for (const c of candidates) {
-    const t = (c.innerText || "").trim();
+    const t = ((c.innerText ?? c.textContent) || "").trim();
     if (t.length > best.length && t.length > 300 && JOB_WORDS.test(t) && c.querySelectorAll("input,select,textarea").length < 25) best = t;
   }
   return best.replace(/\n{3,}/g, "\n\n").slice(0, MAX_DESC);
